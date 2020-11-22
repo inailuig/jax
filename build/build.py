@@ -278,7 +278,7 @@ build:linux --copt=-Wno-stringop-truncation
 
 
 def write_bazelrc(cuda_toolkit_path=None, cudnn_install_path=None,
-                  cuda_version=None, cudnn_version=None, **kwargs):
+                  cuda_version=None, cudnn_version=None, rocm_toolkit_path=None, **kwargs):
   with open("../.bazelrc", "w") as f:
     f.write(BAZELRC_TEMPLATE.format(**kwargs))
     if cuda_toolkit_path:
@@ -293,6 +293,9 @@ def write_bazelrc(cuda_toolkit_path=None, cudnn_install_path=None,
     if cudnn_version:
       f.write("build --action_env TF_CUDNN_VERSION=\"{cudnn_version}\"\n"
               .format(cudnn_version=cudnn_version))
+    if rocm_toolkit_path:
+      f.write("build --action_env ROCM_PATH=\"{rocm_toolkit_path}\"\n"
+              .format(rocm_toolkit_path=rocm_toolkit_path))
 
 BANNER = r"""
      _   _  __  __
@@ -391,6 +394,10 @@ def main():
       default="3.5,5.2,6.0,6.1,7.0",
       help="A comma-separated list of CUDA compute capabilities to support.")
   parser.add_argument(
+      "--rocm_path",
+      default=None,
+      help="Path to the ROCm toolkit.")
+  parser.add_argument(
       "--bazel_startup_options",
       action="append", default=[],
       help="Additional startup options to pass to bazel.")
@@ -431,6 +438,7 @@ def main():
 
   cuda_toolkit_path = args.cuda_path
   cudnn_install_path = args.cudnn_path
+  rocm_toolkit_path = args.rocm_path
   print("CUDA enabled: {}".format("yes" if args.enable_cuda else "no"))
   if args.enable_cuda:
     if cuda_toolkit_path:
@@ -444,6 +452,9 @@ def main():
       print("CUDNN version: {}".format(args.cudnn_version))
 
   print("ROCm enabled: {}".format("yes" if args.enable_rocm else "no"))
+  if args.enable_rocm:
+    if rocm_toolkit_path:
+      print("ROCm toolkit path: {}".format(rocm_toolkit_path))
 
 
   write_bazelrc(
@@ -454,7 +465,8 @@ def main():
       cudnn_install_path=cudnn_install_path,
       cuda_compute_capabilities=args.cuda_compute_capabilities,
       cuda_version=args.cuda_version,
-      cudnn_version=args.cudnn_version)
+      cudnn_version=args.cudnn_version,
+      rocm_toolkit_path=rocm_toolkit_path)
 
   print("\nBuilding XLA and installing it in the jaxlib source tree...")
   config_args = args.bazel_options
