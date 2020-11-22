@@ -227,6 +227,7 @@ build:cuda --define=using_cuda=true --define=using_cuda_nvcc=true
 
 build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
 build:rocm --define=using_rocm=true --define=using_rocm_hipcc=true
+build:nonccl --define=no_nccl_support=true
 
 build --spawn_strategy=standalone
 build --strategy=Genrule=standalone
@@ -467,6 +468,7 @@ def main():
     config_args += ["--define=xla_python_enable_gpu=true"]
   if args.enable_rocm:
     config_args += ["--config=rocm"]
+    config_args += ["--config=nonccl"]
     config_args += ["--define=xla_python_enable_gpu=true"]
   command = ([bazel_path] + args.bazel_startup_options +
     ["run", "--verbose_failures=true"] + config_args +
