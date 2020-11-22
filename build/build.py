@@ -194,6 +194,7 @@ build --python_path="{python_bin_path}"
 build --repo_env TF_NEED_CUDA="{tf_need_cuda}"
 build --action_env TF_CUDA_COMPUTE_CAPABILITIES="{cuda_compute_capabilities}"
 build --repo_env TF_NEED_ROCM="{tf_need_rocm}"
+build --action_env TF_ROCM_AMDGPU_TARGETS="{rocm_amdgpu_targets}"
 build --distinct_host_configuration=false
 build:linux --copt=-Wno-sign-compare
 build:macos --copt=-Wno-sign-compare
@@ -398,6 +399,10 @@ def main():
       default=None,
       help="Path to the ROCm toolkit.")
   parser.add_argument(
+      "--rocm_amdgpu_targets",
+      default="gfx803,gfx900,gfx906,gfx1010",
+      help="A comma-separated list of ROCm amdgpu targets to support.")
+  parser.add_argument(
       "--bazel_startup_options",
       action="append", default=[],
       help="Additional startup options to pass to bazel.")
@@ -455,7 +460,7 @@ def main():
   if args.enable_rocm:
     if rocm_toolkit_path:
       print("ROCm toolkit path: {}".format(rocm_toolkit_path))
-
+      print("ROCm amdgpu targets: {}".format(args.rocm_amdgpu_targets))
 
   write_bazelrc(
       python_bin_path=python_bin_path,
@@ -466,7 +471,9 @@ def main():
       cuda_compute_capabilities=args.cuda_compute_capabilities,
       cuda_version=args.cuda_version,
       cudnn_version=args.cudnn_version,
-      rocm_toolkit_path=rocm_toolkit_path)
+      rocm_toolkit_path=rocm_toolkit_path,
+      rocm_amdgpu_targets=args.rocm_amdgpu_targets,
+)
 
   print("\nBuilding XLA and installing it in the jaxlib source tree...")
   config_args = args.bazel_options
