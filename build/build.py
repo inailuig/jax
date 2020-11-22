@@ -361,6 +361,10 @@ def main():
       parser,
       "enable_cuda",
       help_str="Should we build with CUDA enabled? Requires CUDA and CuDNN.")
+  add_boolean_argument(
+      parser,
+      "enable_rocm",
+      help_str="Should we build with ROCm enabled?")
   parser.add_argument(
       "--cuda_path",
       default=None,
@@ -433,9 +437,14 @@ def main():
       print("CUDA version: {}".format(args.cuda_version))
     if args.cudnn_version:
       print("CUDNN version: {}".format(args.cudnn_version))
+
+  print("ROCm enabled: {}".format("yes" if args.enable_rocm else "no"))
+
+
   write_bazelrc(
       python_bin_path=python_bin_path,
       tf_need_cuda=1 if args.enable_cuda else 0,
+      tf_need_rocm=1 if args.enable_rocm else 0,
       cuda_toolkit_path=cuda_toolkit_path,
       cudnn_install_path=cudnn_install_path,
       cuda_compute_capabilities=args.cuda_compute_capabilities,
@@ -451,6 +460,9 @@ def main():
     config_args += ["--config=mkl_open_source_only"]
   if args.enable_cuda:
     config_args += ["--config=cuda"]
+    config_args += ["--define=xla_python_enable_gpu=true"]
+  if args.enable_rocm:
+    config_args += ["--config=rocm"]
     config_args += ["--define=xla_python_enable_gpu=true"]
   command = ([bazel_path] + args.bazel_startup_options +
     ["run", "--verbose_failures=true"] + config_args +
