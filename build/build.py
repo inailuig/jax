@@ -193,6 +193,7 @@ build --action_env=PYENV_ROOT
 build --python_path="{python_bin_path}"
 build --repo_env TF_NEED_CUDA="{tf_need_cuda}"
 build --action_env TF_CUDA_COMPUTE_CAPABILITIES="{cuda_compute_capabilities}"
+build --repo_env TF_NEED_ROCM="{tf_need_rocm}"
 build --distinct_host_configuration=false
 build:linux --copt=-Wno-sign-compare
 build:macos --copt=-Wno-sign-compare
@@ -223,6 +224,9 @@ build --define=grpc_no_ares=true
 
 build:cuda --crosstool_top=@local_config_cuda//crosstool:toolchain
 build:cuda --define=using_cuda=true --define=using_cuda_nvcc=true
+
+build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
+build:rocm --define=using_rocm=true --define=using_rocm_hipcc=true
 
 build --spawn_strategy=standalone
 build --strategy=Genrule=standalone
