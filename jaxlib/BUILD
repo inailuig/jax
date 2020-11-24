@@ -91,7 +91,6 @@ py_library(
     deps = [
         ":rocblas_kernels",
         ":rocm_prng_kernels",
-        ":rocsolver_kernels",
     ],
 )
 
@@ -119,35 +118,6 @@ pybind_extension(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
 #        "@local_config_rocm//rocm:rocblas", # TODO
-        "@local_config_rocm//rocm:rocm", # TODO
-        "@local_config_rocm//rocm:rocm_headers",
-        "@pybind11",
-    ],
-)
-
-pybind_extension(
-    name = "rocsolver_kernels",
-    srcs = ["rocsolver.cc"],
-    copts = [
-        "-fexceptions",
-        "-fno-strict-aliasing",
-    ],
-    features = ["-use_header_modules"],
-    module_name = "rocsolver_kernels",
-    deps = [
-        ":gpu_kernel_helpers",
-        ":kernel_pybind11_helpers",
-#        "@org_tensorflow//tensorflow/stream_executor/rocm:rocblas_plugin", # TODO
-        "@org_tensorflow//tensorflow/stream_executor/rocm:all_runtime",  
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/base",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/hash",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
         "@local_config_rocm//rocm:rocm", # TODO
         "@local_config_rocm//rocm:rocm_headers",
         "@pybind11",

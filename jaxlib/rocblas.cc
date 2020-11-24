@@ -171,6 +171,12 @@ int SizeOfType(Type type) {
   }
 }
 
+
+//##########################
+// rocblas
+//##########################
+
+
 // Batched triangular solve: trsmbatched
 
 struct TrsmBatchedDescriptor {
@@ -337,8 +343,97 @@ void GetrfBatched(hipStream_t stream, void** buffers, const char* opaque,
  }
 }
 
+
+
+//##########################
+// rocsolver
+//##########################
+
+// potrf: Cholesky decomposition
+
+struct PotrfDescriptor {
+  Type type;
+  rocblas_fill uplo;
+  std::int64_t batch, n;
+};
+
+// Returns the descriptor for a potrf operation.
+std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype, bool lower, int b, int n) {
+  Type type = DtypeToType(dtype);
+  rocblas_fill uplo = lower ? rocblas_fill_lower : rocblas_fill_upper;
+  std::int64_t size = b * sizeof(void*);
+  return {size, PackDescriptor(PotrfDescriptor{type, uplo, b, n})};
+}
+
+void Potrf(hipStream_t stream, void** buffers, const char* opaque,
+           size_t opaque_len) {
+  const PotrfDescriptor& d = *UnpackDescriptor<PotrfDescriptor>(opaque, opaque_len);
+  auto handle = BlasHandlePool::Borrow(stream);
+  if (buffers[1] != buffers[0]) {
+    ThrowIfError(hipMemcpyAsync(buffers[1], buffers[0],
+                                 SizeOfType(d.type) * d.batch * d.n * d.n,
+                                 hipMemcpyDeviceToDevice, stream));
+  }
+
+  int* info = static_cast<int*>(buffers[2]);
+  void* workspace = buffers[3];
+  if (d.batch == 1) {
+    switch (d.type) {
+      case Type::F32: {
+        float* a = static_cast<float*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_spotrf(handle.get(), d.uplo, d.n, a, d.n, info));
+        break;
+      }
+      case Type::F64: {
+        double* a = static_cast<double*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_dpotrf(handle.get(), d.uplo, d.n, a, d.n, info));
+        break;
+      }
+      case Type::C64: {
+        rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_cpotrf(handle.get(), d.uplo, d.n, a, d.n, info));
+        break;
+      }
+      case Type::C128: {
+        rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_zpotrf(handle.get(), d.uplo, d.n, a, d.n, info));
+        break;
+      }
+    }
+  } else {
+    auto buffer_ptrs_host = MakeBatchPointers(stream, buffers[1], workspace, d.batch, SizeOfType(d.type) * d.n * d.n);
+    // Make sure that accesses to buffer_ptrs_host complete before we delete it.
+    // TODO(phawkins): avoid synchronization here.
+    ThrowIfError(hipStreamSynchronize(stream));
+    switch (d.type) {
+      case Type::F32: {
+        ThrowIfErrorStatus(rocsolver_spotrf_batched(handle.get(), d.uplo, d.n, static_cast<float**>(workspace), d.n, info, d.batch));
+        break;
+      }
+      case Type::F64: {
+        ThrowIfErrorStatus(rocsolver_dpotrf_batched(handle.get(), d.uplo, d.n, static_cast<double**>(workspace), d.n, info, d.batch));
+        break;
+      }
+      case Type::C64: {
+        ThrowIfErrorStatus(rocsolver_cpotrf_batched(handle.get(), d.uplo, d.n, static_cast<rocblas_float_complex**>(workspace), d.n, info, d.batch));
+        break;
+      }
+      case Type::C128: {
+        ThrowIfErrorStatus(rocsolver_zpotrf_batched(handle.get(), d.uplo, d.n, static_cast<rocblas_double_complex**>(workspace), d.n, info, d.batch));
+        break;
+      }
+    }
+  }
+}
+
+
+
+
+
+
 py::dict Registrations() {
   py::dict dict;
+  dict["rocsolver_potrf"] = EncapsulateFunction(Potrf);
   dict["rocblas_trsm_batched"] = EncapsulateFunction(TrsmBatched);
   dict["rocblas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
   return dict;
@@ -346,6 +441,7 @@ py::dict Registrations() {
 
 PYBIND11_MODULE(rocblas_kernels, m) {
   m.def("registrations", &Registrations);
+  m.def("build_potrf_descriptor", &BuildPotrfDescriptor);
   m.def("build_trsm_batched_descriptor", &BuildTrsmBatchedDescriptor);
   m.def("build_getrf_batched_descriptor", &BuildGetrfBatchedDescriptor);
 }

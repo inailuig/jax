@@ -27,12 +27,9 @@ try:
 except ImportError:
   pass
 
-try:
-  from jaxlib import rocsolver_kernels
-  for _name, _value in rocsolver_kernels.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="gpu")
-except ImportError:
-  pass
+# put them all in the same module for now
+rocsolver_kernels = rocblas_kernels
+
 
 _ops = xla_client.ops
 _Shape = xla_client.Shape
@@ -83,11 +80,11 @@ def trsm(c, a, b, left_side=False, lower=False, trans_a=False, conj_a=False,
   if conj_a and not trans_a:
     raise NotImplementedError("Conjugation without transposition not supported")
 
-  lwork, opaque = cublas_kernels.build_trsm_batched_descriptor(
+  lwork, opaque = rocblas_kernels.build_trsm_batched_descriptor(
     np.dtype(dtype), batch, m, n, left_side, lower, trans_a, conj_a, diag)
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
   out = _ops.CustomCallWithLayout(
-      c, b"cublas_trsm_batched",
+      c, b"rocblas_trsm_batched",
       operands=(a, b),
       shape_with_layout=_Shape.tuple_shape((
           _Shape.array_shape(dtype, b_shape.dimensions(), layout),
@@ -148,10 +145,10 @@ def getrf(c, a):
   batch = _prod(batch_dims)
 
   if batch > 1 and m == n and m // batch <= 128:
-    lwork, opaque = cublas_kernels.build_getrf_batched_descriptor(
+    lwork, opaque = rocblas_kernels.build_getrf_batched_descriptor(
       np.dtype(dtype), batch, m)
     workspace = _Shape.array_shape(np.dtype(np.int8), (lwork,), (0,))
-    kernel = b"cublas_getrf_batched"
+    kernel = b"rocblas_getrf_batched"
   else:
     lwork, opaque = rocsolver_kernels.build_getrf_descriptor(
         np.dtype(dtype), batch, m, n)
