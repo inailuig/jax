@@ -501,6 +501,95 @@ void Getrf(hipStream_t stream, void** buffers, const char* opaque, size_t opaque
 
 
 
+// geqrf: QR decomposition
+
+struct GeqrfDescriptor {
+  Type type;
+  int batch, m, n;
+};
+
+std::pair<int, py::bytes> BuildGeqrfDescriptor(const py::dtype& dtype, int b, int m, int n) {
+  Type type = DtypeToType(dtype);
+  std::int64_t size = b * sizeof(void*); // TODO
+  return {size, PackDescriptor(GeqrfDescriptor{type, b, m, n})};
+}
+
+
+void Geqrf(hipStream_t stream, void** buffers, const char* opaque, size_t opaque_len) {
+  const GeqrfDescriptor& d = *UnpackDescriptor<GeqrfDescriptor>(opaque, opaque_len);
+  auto handle = BlasHandlePool::Borrow(stream);
+  if (buffers[1] != buffers[0]) {
+    ThrowIfError(hipMemcpyAsync( buffers[1], buffers[0], SizeOfType(d.type) * d.batch * d.m * d.n, hipMemcpyDeviceToDevice, stream));
+  }
+
+    if (d.batch == 1) {
+      switch (d.type) {
+        case Type::F32: {
+          float* a = static_cast<float*>(buffers[1]);
+          float* ipiv = static_cast<float*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_sgeqrf(handle.get(), d.m, d.n, a, d.m, ipiv));
+          break;
+        }
+        case Type::F64: {
+          double* a = static_cast<double*>(buffers[1]);
+          double* ipiv = static_cast<double*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_dgeqrf(handle.get(), d.m, d.n, a, d.m, ipiv));
+          break;
+        }
+        case Type::C64: {
+          rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
+          rocblas_float_complex* ipiv = static_cast<rocblas_float_complex*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_cgeqrf(handle.get(), d.m, d.n, a, d.m, ipiv));
+          break;
+        }
+        case Type::C128: {
+          rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
+          rocblas_double_complex* ipiv = static_cast<rocblas_double_complex*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_zgeqrf(handle.get(), d.m, d.n, a, d.m, ipiv));
+          break;
+        }
+      }
+    } else {
+
+      auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.n * d.n);
+      // TODO(phawkins): ideally we would not need to synchronize here, but to
+      // avoid it we need a way to keep the host-side buffer alive until the copy
+      // completes.
+      ThrowIfError(hipStreamSynchronize(stream));
+
+      switch (d.type) {
+        case Type::F32: {
+          float** batch_ptrs = static_cast<float**>(buffers[4]);
+          float* ipiv = static_cast<float*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_sgeqrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, d.batch));
+          break;
+        }
+        case Type::F64: {
+          double** batch_ptrs = static_cast<double**>(buffers[4]);
+          double* ipiv = static_cast<double*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_dgeqrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, d.batch));
+          break;
+        }
+        case Type::C64: {
+          rocblas_float_complex** batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
+          rocblas_float_complex* ipiv = static_cast<rocblas_float_complex*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_cgeqrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, d.batch));
+          break;
+        }
+        case Type::C128: {
+          rocblas_double_complex** batch_ptrs = static_cast<rocblas_double_complex**>(buffers[4]);
+          rocblas_double_complex* ipiv = static_cast<rocblas_double_complex*>(buffers[2]);
+          ThrowIfErrorStatus(rocsolver_zgeqrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, d.batch));
+          break;
+        }
+      }
+    }
+  }
+
+
+
+
+
 
 
 
@@ -513,6 +602,8 @@ py::dict Registrations() {
 
   dict["rocsolver_potrf"] = EncapsulateFunction(Potrf);
   dict["rocsolver_getrf"] = EncapsulateFunction(Getrf);
+  dict["rocsolver_geqrf"] = EncapsulateFunction(Geqrf);
+
 
   return dict;
 }
@@ -525,6 +616,7 @@ PYBIND11_MODULE(rocblas_kernels, m) {
 
   m.def("build_potrf_descriptor", &BuildPotrfDescriptor);
   m.def("build_getrf_descriptor", &BuildGetrfDescriptor);
+  m.def("build_geqrf_descriptor", &BuildGeqrfDescriptor);
 
 }
 
