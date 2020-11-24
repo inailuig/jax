@@ -38,8 +38,8 @@ py_binary(
 #        "//jaxlib:cusolver_kernels",
 #        "//jaxlib:cuda_prng_kernels",
     ]) + if_rocm([
-#        "//jaxlib:rocblas_kernels",
-#        "//jaxlib:cusolver_kernels",
+        "//jaxlib:rocblas_kernels",
+#        "//jaxlib:rocsolver_kernels",
         "//jaxlib:rocm_prng_kernels",
     ]),
     deps = ["@bazel_tools//tools/python/runfiles"],

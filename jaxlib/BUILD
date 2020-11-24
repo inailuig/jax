@@ -77,7 +77,7 @@ py_library(
     name = "jaxlib",
     srcs = [
         "rocm_prng.py",
-#        "cusolver.py",
+        "rocsolver.py",
         "init.py",
         "pocketfft.py",
         "setup.py",
@@ -89,26 +89,26 @@ py_library(
 py_library(
     name = "gpu_support",
     deps = [
-#        ":cublas_kernels",
+        ":rocblas_kernels",
         ":rocm_prng_kernels",
-#        ":cusolver_kernels",
+        ":rocsolver_kernels",
     ],
 )
 
 pybind_extension(
-    name = "cublas_kernels",
-    srcs = ["cublas.cc"],
+    name = "rocblas_kernels",
+    srcs = ["rocblas.cc"],
     copts = [
         "-fexceptions",
         "-fno-strict-aliasing",
     ],
     features = ["-use_header_modules"],
-    module_name = "cublas_kernels",
+    module_name = "rocblas_kernels",
     deps = [
         ":gpu_kernel_helpers",
         ":kernel_pybind11_helpers",
-        "@org_tensorflow//tensorflow/stream_executor/cuda:cublas_lib",
-        "@org_tensorflow//tensorflow/stream_executor/cuda:cudart_stub",
+#        "@org_tensorflow//tensorflow/stream_executor/rocm:rocblas_plugin", # TODO
+        "@org_tensorflow//tensorflow/stream_executor/rocm:all_runtime",  
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
@@ -118,26 +118,26 @@ pybind_extension(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
-        "@local_config_rocm//rocm:rocblas", # TODO
+#        "@local_config_rocm//rocm:rocblas", # TODO
+        "@local_config_rocm//rocm:rocm", # TODO
         "@local_config_rocm//rocm:rocm_headers",
         "@pybind11",
     ],
 )
 
 pybind_extension(
-    name = "cusolver_kernels",
-    srcs = ["cusolver.cc"],
+    name = "rocsolver_kernels",
+    srcs = ["rocsolver.cc"],
     copts = [
         "-fexceptions",
         "-fno-strict-aliasing",
     ],
     features = ["-use_header_modules"],
-    module_name = "cusolver_kernels",
+    module_name = "rocsolver_kernels",
     deps = [
         ":gpu_kernel_helpers",
         ":kernel_pybind11_helpers",
-        "@org_tensorflow//tensorflow/stream_executor/cuda:cudart_stub",
-        "@org_tensorflow//tensorflow/stream_executor/cuda:cusolver_lib",
+        "@org_tensorflow//tensorflow/stream_executor/rocm:rocblas_plugin", # TODO
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
@@ -175,7 +175,6 @@ pybind_extension(
     deps = [
         ":rocm_prng_kernels_lib",
         ":kernel_pybind11_helpers",
-#        "@org_tensorflow//tensorflow/stream_executor/cuda:cudart_stub",
         "@local_config_rocm//rocm:rocm_headers",
         "@pybind11",
     ],

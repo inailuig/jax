@@ -25,9 +25,10 @@ limitations under the License.
 #include "absl/memory/memory.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
-#include "third_party/gpus/rocm/include/hip/hip_runtime.h"
-#include "third_party/gpus/rocm/include/hip/hip_runtime_api.h"
-#include "third_party/gpus/rocm/include/cusolverDn.h"
+#include "rocm/include/hip/hip_runtime.h"
+#include "rocm/include/hip/hip_runtime_api.h"
+//#include "rocm/include/rocsolver.h"
+//#include "rocm/include/hipblas.h"
 #include "include/pybind11/numpy.h"
 #include "include/pybind11/pybind11.h"
 #include "include/pybind11/stl.h"
@@ -39,44 +40,44 @@ namespace {
 
 namespace py = pybind11;
 
-void ThrowIfErrorStatus(cusolverStatus_t status) {
+void ThrowIfErrorStatus(rocsolverStatus_t status) {
   switch (status) {
-    case CUSOLVER_STATUS_SUCCESS:
+    case rocsolver_STATUS_SUCCESS:
       return;
-    case CUSOLVER_STATUS_NOT_INITIALIZED:
-      throw std::runtime_error("cuSolver has not been initialized");
-    case CUSOLVER_STATUS_ALLOC_FAILED:
-      throw std::runtime_error("cuSolver allocation failed");
-    case CUSOLVER_STATUS_INVALID_VALUE:
-      throw std::runtime_error("cuSolver invalid value error");
-    case CUSOLVER_STATUS_ARCH_MISMATCH:
-      throw std::runtime_error("cuSolver architecture mismatch error");
-    case CUSOLVER_STATUS_MAPPING_ERROR:
-      throw std::runtime_error("cuSolver mapping error");
-    case CUSOLVER_STATUS_EXECUTION_FAILED:
-      throw std::runtime_error("cuSolver execution failed");
-    case CUSOLVER_STATUS_INTERNAL_ERROR:
-      throw std::runtime_error("cuSolver internal error");
-    case CUSOLVER_STATUS_MATRIX_TYPE_NOT_SUPPORTED:
-      throw std::invalid_argument("cuSolver matrix type not supported error");
-    case CUSOLVER_STATUS_NOT_SUPPORTED:
-      throw std::runtime_error("cuSolver not supported error");
-    case CUSOLVER_STATUS_ZERO_PIVOT:
-      throw std::runtime_error("cuSolver zero pivot error");
-    case CUSOLVER_STATUS_INVALID_LICENSE:
-      throw std::runtime_error("cuSolver invalid license error");
+    case rocsolver_STATUS_NOT_INITIALIZED:
+      throw std::runtime_error("rocsolver has not been initialized");
+    case rocsolver_STATUS_ALLOC_FAILED:
+      throw std::runtime_error("rocsolver allocation failed");
+    case rocsolver_STATUS_INVALID_VALUE:
+      throw std::runtime_error("rocsolver invalid value error");
+    case rocsolver_STATUS_ARCH_MISMATCH:
+      throw std::runtime_error("rocsolver architecture mismatch error");
+    case rocsolver_STATUS_MAPPING_ERROR:
+      throw std::runtime_error("rocsolver mapping error");
+    case rocsolver_STATUS_EXECUTION_FAILED:
+      throw std::runtime_error("rocsolver execution failed");
+    case rocsolver_STATUS_INTERNAL_ERROR:
+      throw std::runtime_error("rocsolver internal error");
+    case rocsolver_STATUS_MATRIX_TYPE_NOT_SUPPORTED:
+      throw std::invalid_argument("rocsolver matrix type not supported error");
+    case rocsolver_STATUS_NOT_SUPPORTED:
+      throw std::runtime_error("rocsolver not supported error");
+    case rocsolver_STATUS_ZERO_PIVOT:
+      throw std::runtime_error("rocsolver zero pivot error");
+    case rocsolver_STATUS_INVALID_LICENSE:
+      throw std::runtime_error("rocsolver invalid license error");
     default:
-      throw std::runtime_error("Unknown cuSolver error");
+      throw std::runtime_error("Unknown rocsolver error");
   }
 }
 
-// To avoid creating cusolver contexts in the middle of execution, we maintain
+// To avoid creating rocsolver contexts in the middle of execution, we maintain
 // a pool of them.
 class SolverHandlePool {
  public:
   SolverHandlePool() = default;
 
-  // RAII class representing a cusolver handle borrowed from the pool. Returns
+  // RAII class representing a rocsolver handle borrowed from the pool. Returns
   // the handle to the pool on destruction.
   class Handle {
    public:
@@ -103,14 +104,14 @@ class SolverHandlePool {
       return *this;
     }
 
-    cusolverDnHandle_t get() { return handle_; }
+    rocsolverDnHandle_t get() { return handle_; }
 
    private:
     friend class SolverHandlePool;
-    Handle(SolverHandlePool* pool, cusolverDnHandle_t handle)
+    Handle(SolverHandlePool* pool, rocsolverDnHandle_t handle)
         : pool_(pool), handle_(handle) {}
     SolverHandlePool* pool_ = nullptr;
-    cusolverDnHandle_t handle_ = nullptr;
+    rocsolverDnHandle_t handle_ = nullptr;
   };
 
   // Borrows a handle from the pool. If 'stream' is non-null, sets the stream
@@ -120,10 +121,10 @@ class SolverHandlePool {
  private:
   static SolverHandlePool* Instance();
 
-  void Return(cusolverDnHandle_t handle);
+  void Return(rocsolverDnHandle_t handle);
 
   absl::Mutex mu_;
-  std::vector<cusolverDnHandle_t> handles_ ABSL_GUARDED_BY(mu_);
+  std::vector<rocsolverDnHandle_t> handles_ ABSL_GUARDED_BY(mu_);
 };
 
 /*static*/ SolverHandlePool* SolverHandlePool::Instance() {
@@ -135,25 +136,25 @@ class SolverHandlePool {
     hipStream_t stream) {
   SolverHandlePool* pool = Instance();
   absl::MutexLock lock(&pool->mu_);
-  cusolverDnHandle_t handle;
+  rocsolverDnHandle_t handle;
   if (pool->handles_.empty()) {
-    ThrowIfErrorStatus(cusolverDnCreate(&handle));
+    ThrowIfErrorStatus(rocsolverDnCreate(&handle));
   } else {
     handle = pool->handles_.back();
     pool->handles_.pop_back();
   }
   if (stream) {
-    ThrowIfErrorStatus(cusolverDnSetStream(handle, stream));
+    ThrowIfErrorStatus(rocsolverDnSetStream(handle, stream));
   }
   return Handle(pool, handle);
 }
 
-void SolverHandlePool::Return(cusolverDnHandle_t handle) {
+void SolverHandlePool::Return(rocsolverDnHandle_t handle) {
   absl::MutexLock lock(&mu_);
   handles_.push_back(handle);
 }
 
-// Set of types known to Cusolver.
+// Set of types known to rocsolver.
 enum class Type {
   F32,
   F64,
@@ -211,25 +212,25 @@ std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype,
   if (b == 1) {
     switch (type) {
       case Type::F32:
-        ThrowIfErrorStatus(cusolverDnSpotrf_bufferSize(handle.get(), uplo, n,
+        ThrowIfErrorStatus(rocsolverDnSpotrf_bufferSize(handle.get(), uplo, n,
                                                        /*A=*/nullptr,
                                                        /*lda=*/n, &lwork));
         workspace_size = lwork * sizeof(float);
         break;
       case Type::F64:
-        ThrowIfErrorStatus(cusolverDnDpotrf_bufferSize(handle.get(), uplo, n,
+        ThrowIfErrorStatus(rocsolverDnDpotrf_bufferSize(handle.get(), uplo, n,
                                                        /*A=*/nullptr,
                                                        /*lda=*/n, &lwork));
         workspace_size = lwork * sizeof(double);
         break;
       case Type::C64:
-        ThrowIfErrorStatus(cusolverDnCpotrf_bufferSize(handle.get(), uplo, n,
+        ThrowIfErrorStatus(rocsolverDnCpotrf_bufferSize(handle.get(), uplo, n,
                                                        /*A=*/nullptr,
                                                        /*lda=*/n, &lwork));
         workspace_size = lwork * sizeof(hipComplex);
         break;
       case Type::C128:
-        ThrowIfErrorStatus(cusolverDnZpotrf_bufferSize(handle.get(), uplo, n,
+        ThrowIfErrorStatus(rocsolverDnZpotrf_bufferSize(handle.get(), uplo, n,
                                                        /*A=*/nullptr,
                                                        /*lda=*/n, &lwork));
         workspace_size = lwork * sizeof(hipDoubleComplex);
@@ -260,28 +261,28 @@ void Potrf(hipStream_t stream, void** buffers, const char* opaque,
     switch (d.type) {
       case Type::F32: {
         float* a = static_cast<float*>(buffers[1]);
-        ThrowIfErrorStatus(cusolverDnSpotrf(handle.get(), d.uplo, d.n, a, d.n,
+        ThrowIfErrorStatus(rocsolverDnSpotrf(handle.get(), d.uplo, d.n, a, d.n,
                                             static_cast<float*>(workspace),
                                             d.lwork, info));
         break;
       }
       case Type::F64: {
         double* a = static_cast<double*>(buffers[1]);
-        ThrowIfErrorStatus(cusolverDnDpotrf(handle.get(), d.uplo, d.n, a, d.n,
+        ThrowIfErrorStatus(rocsolverDnDpotrf(handle.get(), d.uplo, d.n, a, d.n,
                                             static_cast<double*>(workspace),
                                             d.lwork, info));
         break;
       }
       case Type::C64: {
         hipComplex* a = static_cast<hipComplex*>(buffers[1]);
-        ThrowIfErrorStatus(cusolverDnCpotrf(handle.get(), d.uplo, d.n, a, d.n,
+        ThrowIfErrorStatus(rocsolverDnCpotrf(handle.get(), d.uplo, d.n, a, d.n,
                                             static_cast<hipComplex*>(workspace),
                                             d.lwork, info));
         break;
       }
       case Type::C128: {
         hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
-        ThrowIfErrorStatus(cusolverDnZpotrf(
+        ThrowIfErrorStatus(rocsolverDnZpotrf(
             handle.get(), d.uplo, d.n, a, d.n,
             static_cast<hipDoubleComplex*>(workspace), d.lwork, info));
         break;
@@ -295,26 +296,26 @@ void Potrf(hipStream_t stream, void** buffers, const char* opaque,
     ThrowIfError(hipStreamSynchronize(stream));
     switch (d.type) {
       case Type::F32: {
-        ThrowIfErrorStatus(cusolverDnSpotrfBatched(
+        ThrowIfErrorStatus(rocsolverDnSpotrfBatched(
             handle.get(), d.uplo, d.n, static_cast<float**>(workspace), d.n,
 
             info, d.batch));
         break;
       }
       case Type::F64: {
-        ThrowIfErrorStatus(cusolverDnDpotrfBatched(
+        ThrowIfErrorStatus(rocsolverDnDpotrfBatched(
             handle.get(), d.uplo, d.n, static_cast<double**>(workspace), d.n,
             info, d.batch));
         break;
       }
       case Type::C64: {
-        ThrowIfErrorStatus(cusolverDnCpotrfBatched(
+        ThrowIfErrorStatus(rocsolverDnCpotrfBatched(
             handle.get(), d.uplo, d.n, static_cast<hipComplex**>(workspace), d.n,
             info, d.batch));
         break;
       }
       case Type::C128: {
-        ThrowIfErrorStatus(cusolverDnZpotrfBatched(
+        ThrowIfErrorStatus(rocsolverDnZpotrfBatched(
             handle.get(), d.uplo, d.n,
             static_cast<hipDoubleComplex**>(workspace), d.n, info, d.batch));
         break;
@@ -338,22 +339,22 @@ std::pair<int, py::bytes> BuildGetrfDescriptor(const py::dtype& dtype, int b,
   int lwork;
   switch (type) {
     case Type::F32:
-      ThrowIfErrorStatus(cusolverDnSgetrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnSgetrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
     case Type::F64:
-      ThrowIfErrorStatus(cusolverDnDgetrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnDgetrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
     case Type::C64:
-      ThrowIfErrorStatus(cusolverDnCgetrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnCgetrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
     case Type::C128:
-      ThrowIfErrorStatus(cusolverDnZgetrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnZgetrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
@@ -381,7 +382,7 @@ void Getrf(hipStream_t stream, void** buffers, const char* opaque,
     case Type::F32: {
       float* a = static_cast<float*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnSgetrf(handle.get(), d.m, d.n, a, d.m,
+        ThrowIfErrorStatus(rocsolverDnSgetrf(handle.get(), d.m, d.n, a, d.m,
                                             static_cast<float*>(workspace),
                                             ipiv, info));
         a += d.m * d.n;
@@ -393,7 +394,7 @@ void Getrf(hipStream_t stream, void** buffers, const char* opaque,
     case Type::F64: {
       double* a = static_cast<double*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnDgetrf(handle.get(), d.m, d.n, a, d.m,
+        ThrowIfErrorStatus(rocsolverDnDgetrf(handle.get(), d.m, d.n, a, d.m,
                                             static_cast<double*>(workspace),
                                             ipiv, info));
         a += d.m * d.n;
@@ -405,7 +406,7 @@ void Getrf(hipStream_t stream, void** buffers, const char* opaque,
     case Type::C64: {
       hipComplex* a = static_cast<hipComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnCgetrf(handle.get(), d.m, d.n, a, d.m,
+        ThrowIfErrorStatus(rocsolverDnCgetrf(handle.get(), d.m, d.n, a, d.m,
                                             static_cast<hipComplex*>(workspace),
                                             ipiv, info));
         a += d.m * d.n;
@@ -417,7 +418,7 @@ void Getrf(hipStream_t stream, void** buffers, const char* opaque,
     case Type::C128: {
       hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnZgetrf(
+        ThrowIfErrorStatus(rocsolverDnZgetrf(
             handle.get(), d.m, d.n, a, d.m,
             static_cast<hipDoubleComplex*>(workspace), ipiv, info));
         a += d.m * d.n;
@@ -444,22 +445,22 @@ std::pair<int, py::bytes> BuildGeqrfDescriptor(const py::dtype& dtype, int b,
   int lwork;
   switch (type) {
     case Type::F32:
-      ThrowIfErrorStatus(cusolverDnSgeqrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnSgeqrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
     case Type::F64:
-      ThrowIfErrorStatus(cusolverDnDgeqrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnDgeqrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
     case Type::C64:
-      ThrowIfErrorStatus(cusolverDnCgeqrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnCgeqrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
     case Type::C128:
-      ThrowIfErrorStatus(cusolverDnZgeqrf_bufferSize(handle.get(), m, n,
+      ThrowIfErrorStatus(rocsolverDnZgeqrf_bufferSize(handle.get(), m, n,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, &lwork));
       break;
@@ -487,7 +488,7 @@ void Geqrf(hipStream_t stream, void** buffers, const char* opaque,
       float* a = static_cast<float*>(buffers[1]);
       float* tau = static_cast<float*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnSgeqrf(handle.get(), d.m, d.n, a, d.m, tau,
+        ThrowIfErrorStatus(rocsolverDnSgeqrf(handle.get(), d.m, d.n, a, d.m, tau,
                                             static_cast<float*>(workspace),
                                             d.lwork, info));
         a += d.m * d.n;
@@ -500,7 +501,7 @@ void Geqrf(hipStream_t stream, void** buffers, const char* opaque,
       double* a = static_cast<double*>(buffers[1]);
       double* tau = static_cast<double*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnDgeqrf(handle.get(), d.m, d.n, a, d.m, tau,
+        ThrowIfErrorStatus(rocsolverDnDgeqrf(handle.get(), d.m, d.n, a, d.m, tau,
                                             static_cast<double*>(workspace),
                                             d.lwork, info));
         a += d.m * d.n;
@@ -513,7 +514,7 @@ void Geqrf(hipStream_t stream, void** buffers, const char* opaque,
       hipComplex* a = static_cast<hipComplex*>(buffers[1]);
       hipComplex* tau = static_cast<hipComplex*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnCgeqrf(handle.get(), d.m, d.n, a, d.m, tau,
+        ThrowIfErrorStatus(rocsolverDnCgeqrf(handle.get(), d.m, d.n, a, d.m, tau,
                                             static_cast<hipComplex*>(workspace),
                                             d.lwork, info));
         a += d.m * d.n;
@@ -526,7 +527,7 @@ void Geqrf(hipStream_t stream, void** buffers, const char* opaque,
       hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
       hipDoubleComplex* tau = static_cast<hipDoubleComplex*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnZgeqrf(
+        ThrowIfErrorStatus(rocsolverDnZgeqrf(
             handle.get(), d.m, d.n, a, d.m, tau,
             static_cast<hipDoubleComplex*>(workspace), d.lwork, info));
         a += d.m * d.n;
@@ -553,25 +554,25 @@ std::pair<int, py::bytes> BuildOrgqrDescriptor(const py::dtype& dtype, int b,
   int lwork;
   switch (type) {
     case Type::F32:
-      ThrowIfErrorStatus(cusolverDnSorgqr_bufferSize(handle.get(), m, n, k,
+      ThrowIfErrorStatus(rocsolverDnSorgqr_bufferSize(handle.get(), m, n, k,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, /*tau=*/nullptr,
                                                      &lwork));
       break;
     case Type::F64:
-      ThrowIfErrorStatus(cusolverDnDorgqr_bufferSize(handle.get(), m, n, k,
+      ThrowIfErrorStatus(rocsolverDnDorgqr_bufferSize(handle.get(), m, n, k,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, /*tau=*/nullptr,
                                                      &lwork));
       break;
     case Type::C64:
-      ThrowIfErrorStatus(cusolverDnCungqr_bufferSize(handle.get(), m, n, k,
+      ThrowIfErrorStatus(rocsolverDnCungqr_bufferSize(handle.get(), m, n, k,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, /*tau=*/nullptr,
                                                      &lwork));
       break;
     case Type::C128:
-      ThrowIfErrorStatus(cusolverDnZungqr_bufferSize(handle.get(), m, n, k,
+      ThrowIfErrorStatus(rocsolverDnZungqr_bufferSize(handle.get(), m, n, k,
                                                      /*A=*/nullptr,
                                                      /*lda=*/m, /*tau=*/nullptr,
                                                      &lwork));
@@ -600,7 +601,7 @@ void Orgqr(hipStream_t stream, void** buffers, const char* opaque,
       float* a = static_cast<float*>(buffers[2]);
       float* tau = static_cast<float*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnSorgqr(handle.get(), d.m, d.n, d.k, a, d.m,
+        ThrowIfErrorStatus(rocsolverDnSorgqr(handle.get(), d.m, d.n, d.k, a, d.m,
                                             tau, static_cast<float*>(workspace),
                                             d.lwork, info));
         a += d.m * d.n;
@@ -614,7 +615,7 @@ void Orgqr(hipStream_t stream, void** buffers, const char* opaque,
       double* tau = static_cast<double*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(
-            cusolverDnDorgqr(handle.get(), d.m, d.n, d.k, a, d.m, tau,
+            rocsolverDnDorgqr(handle.get(), d.m, d.n, d.k, a, d.m, tau,
                              static_cast<double*>(workspace), d.lwork, info));
         a += d.m * d.n;
         tau += d.k;
@@ -626,7 +627,7 @@ void Orgqr(hipStream_t stream, void** buffers, const char* opaque,
       hipComplex* a = static_cast<hipComplex*>(buffers[2]);
       hipComplex* tau = static_cast<hipComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnCungqr(
+        ThrowIfErrorStatus(rocsolverDnCungqr(
             handle.get(), d.m, d.n, d.k, a, d.m, tau,
             static_cast<hipComplex*>(workspace), d.lwork, info));
         a += d.m * d.n;
@@ -639,7 +640,7 @@ void Orgqr(hipStream_t stream, void** buffers, const char* opaque,
       hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[2]);
       hipDoubleComplex* tau = static_cast<hipDoubleComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnZungqr(
+        ThrowIfErrorStatus(rocsolverDnZungqr(
             handle.get(), d.m, d.n, d.k, a, d.m, tau,
             static_cast<hipDoubleComplex*>(workspace), d.lwork, info));
         a += d.m * d.n;
@@ -666,27 +667,27 @@ std::pair<int, py::bytes> BuildSyevdDescriptor(const py::dtype& dtype,
   Type type = DtypeToType(dtype);
   auto handle = SolverHandlePool::Borrow();
   int lwork;
-  cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_VECTOR;
+  rocsolverEigMode_t jobz = rocsolver_EIG_MODE_VECTOR;
   hipblasFillMode_t uplo =
       lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
   switch (type) {
     case Type::F32:
-      ThrowIfErrorStatus(cusolverDnSsyevd_bufferSize(
+      ThrowIfErrorStatus(rocsolverDnSsyevd_bufferSize(
           handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n, /*W=*/nullptr,
           &lwork));
       break;
     case Type::F64:
-      ThrowIfErrorStatus(cusolverDnDsyevd_bufferSize(
+      ThrowIfErrorStatus(rocsolverDnDsyevd_bufferSize(
           handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n, /*W=*/nullptr,
           &lwork));
       break;
     case Type::C64:
-      ThrowIfErrorStatus(cusolverDnCheevd_bufferSize(
+      ThrowIfErrorStatus(rocsolverDnCheevd_bufferSize(
           handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n, /*W=*/nullptr,
           &lwork));
       break;
     case Type::C128:
-      ThrowIfErrorStatus(cusolverDnZheevd_bufferSize(
+      ThrowIfErrorStatus(rocsolverDnZheevd_bufferSize(
           handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n, /*W=*/nullptr,
           &lwork));
       break;
@@ -704,7 +705,7 @@ void Syevd(hipStream_t stream, void** buffers, const char* opaque,
       SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
           static_cast<std::int64_t>(d.n) * static_cast<std::int64_t>(d.n),
       hipMemcpyDeviceToDevice, stream));
-  cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_VECTOR;
+  rocsolverEigMode_t jobz = rocsolver_EIG_MODE_VECTOR;
   int* info = static_cast<int*>(buffers[3]);
   void* work = buffers[4];
   switch (d.type) {
@@ -712,7 +713,7 @@ void Syevd(hipStream_t stream, void** buffers, const char* opaque,
       float* a = static_cast<float*>(buffers[1]);
       float* w = static_cast<float*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnSsyevd(handle.get(), jobz, d.uplo, d.n, a,
+        ThrowIfErrorStatus(rocsolverDnSsyevd(handle.get(), jobz, d.uplo, d.n, a,
                                             d.n, w, static_cast<float*>(work),
                                             d.lwork, info));
         a += d.n * d.n;
@@ -725,7 +726,7 @@ void Syevd(hipStream_t stream, void** buffers, const char* opaque,
       double* a = static_cast<double*>(buffers[1]);
       double* w = static_cast<double*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnDsyevd(handle.get(), jobz, d.uplo, d.n, a,
+        ThrowIfErrorStatus(rocsolverDnDsyevd(handle.get(), jobz, d.uplo, d.n, a,
                                             d.n, w, static_cast<double*>(work),
                                             d.lwork, info));
         a += d.n * d.n;
@@ -739,7 +740,7 @@ void Syevd(hipStream_t stream, void** buffers, const char* opaque,
       float* w = static_cast<float*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(
-            cusolverDnCheevd(handle.get(), jobz, d.uplo, d.n, a, d.n, w,
+            rocsolverDnCheevd(handle.get(), jobz, d.uplo, d.n, a, d.n, w,
                              static_cast<hipComplex*>(work), d.lwork, info));
         a += d.n * d.n;
         w += d.n;
@@ -751,7 +752,7 @@ void Syevd(hipStream_t stream, void** buffers, const char* opaque,
       hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
       double* w = static_cast<double*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnZheevd(
+        ThrowIfErrorStatus(rocsolverDnZheevd(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
             static_cast<hipDoubleComplex*>(work), d.lwork, info));
         a += d.n * d.n;
@@ -780,31 +781,31 @@ std::pair<int, py::bytes> BuildSyevjDescriptor(const py::dtype& dtype,
   auto handle = SolverHandlePool::Borrow();
   int lwork;
   syevjInfo_t params;
-  ThrowIfErrorStatus(cusolverDnCreateSyevjInfo(&params));
+  ThrowIfErrorStatus(rocsolverDnCreateSyevjInfo(&params));
   std::unique_ptr<syevjInfo, void (*)(syevjInfo*)> params_cleanup(
-      params, [](syevjInfo* p) { cusolverDnDestroySyevjInfo(p); });
-  cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_VECTOR;
+      params, [](syevjInfo* p) { rocsolverDnDestroySyevjInfo(p); });
+  rocsolverEigMode_t jobz = rocsolver_EIG_MODE_VECTOR;
   hipblasFillMode_t uplo =
       lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
   if (batch == 1) {
     switch (type) {
       case Type::F32:
-        ThrowIfErrorStatus(cusolverDnSsyevj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnSsyevj_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params));
         break;
       case Type::F64:
-        ThrowIfErrorStatus(cusolverDnDsyevj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnDsyevj_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params));
         break;
       case Type::C64:
-        ThrowIfErrorStatus(cusolverDnCheevj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnCheevj_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params));
         break;
       case Type::C128:
-        ThrowIfErrorStatus(cusolverDnZheevj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnZheevj_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params));
         break;
@@ -812,22 +813,22 @@ std::pair<int, py::bytes> BuildSyevjDescriptor(const py::dtype& dtype,
   } else {
     switch (type) {
       case Type::F32:
-        ThrowIfErrorStatus(cusolverDnSsyevjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnSsyevjBatched_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params, batch));
         break;
       case Type::F64:
-        ThrowIfErrorStatus(cusolverDnDsyevjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnDsyevjBatched_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params, batch));
         break;
       case Type::C64:
-        ThrowIfErrorStatus(cusolverDnCheevjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnCheevjBatched_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params, batch));
         break;
       case Type::C128:
-        ThrowIfErrorStatus(cusolverDnZheevjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnZheevjBatched_bufferSize(
             handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n,
             /*W=*/nullptr, &lwork, params, batch));
         break;
@@ -849,11 +850,11 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
         hipMemcpyDeviceToDevice, stream));
   }
   syevjInfo_t params;
-  ThrowIfErrorStatus(cusolverDnCreateSyevjInfo(&params));
+  ThrowIfErrorStatus(rocsolverDnCreateSyevjInfo(&params));
   std::unique_ptr<syevjInfo, void (*)(syevjInfo*)> params_cleanup(
-      params, [](syevjInfo* p) { cusolverDnDestroySyevjInfo(p); });
+      params, [](syevjInfo* p) { rocsolverDnDestroySyevjInfo(p); });
 
-  cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_VECTOR;
+  rocsolverEigMode_t jobz = rocsolver_EIG_MODE_VECTOR;
   int* info = static_cast<int*>(buffers[3]);
   void* work = buffers[4];
   if (d.batch == 1) {
@@ -861,7 +862,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
       case Type::F32: {
         float* a = static_cast<float*>(buffers[1]);
         float* w = static_cast<float*>(buffers[2]);
-        ThrowIfErrorStatus(cusolverDnSsyevj(handle.get(), jobz, d.uplo, d.n, a,
+        ThrowIfErrorStatus(rocsolverDnSsyevj(handle.get(), jobz, d.uplo, d.n, a,
                                             d.n, w, static_cast<float*>(work),
                                             d.lwork, info, params));
         break;
@@ -869,7 +870,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
       case Type::F64: {
         double* a = static_cast<double*>(buffers[1]);
         double* w = static_cast<double*>(buffers[2]);
-        ThrowIfErrorStatus(cusolverDnDsyevj(handle.get(), jobz, d.uplo, d.n, a,
+        ThrowIfErrorStatus(rocsolverDnDsyevj(handle.get(), jobz, d.uplo, d.n, a,
                                             d.n, w, static_cast<double*>(work),
                                             d.lwork, info, params));
         break;
@@ -877,7 +878,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
       case Type::C64: {
         hipComplex* a = static_cast<hipComplex*>(buffers[1]);
         float* w = static_cast<float*>(buffers[2]);
-        ThrowIfErrorStatus(cusolverDnCheevj(
+        ThrowIfErrorStatus(rocsolverDnCheevj(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
             static_cast<hipComplex*>(work), d.lwork, info, params));
         break;
@@ -885,7 +886,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
       case Type::C128: {
         hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         double* w = static_cast<double*>(buffers[2]);
-        ThrowIfErrorStatus(cusolverDnZheevj(
+        ThrowIfErrorStatus(rocsolverDnZheevj(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
             static_cast<hipDoubleComplex*>(work), d.lwork, info, params));
         break;
@@ -896,7 +897,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
       case Type::F32: {
         float* a = static_cast<float*>(buffers[1]);
         float* w = static_cast<float*>(buffers[2]);
-        ThrowIfErrorStatus(cusolverDnSsyevjBatched(
+        ThrowIfErrorStatus(rocsolverDnSsyevjBatched(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
             static_cast<float*>(work), d.lwork, info, params, d.batch));
         break;
@@ -904,7 +905,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
       case Type::F64: {
         double* a = static_cast<double*>(buffers[1]);
         double* w = static_cast<double*>(buffers[2]);
-        ThrowIfErrorStatus(cusolverDnDsyevjBatched(
+        ThrowIfErrorStatus(rocsolverDnDsyevjBatched(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
             static_cast<double*>(work), d.lwork, info, params, d.batch));
         break;
@@ -912,7 +913,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
       case Type::C64: {
         hipComplex* a = static_cast<hipComplex*>(buffers[1]);
         float* w = static_cast<float*>(buffers[2]);
-        ThrowIfErrorStatus(cusolverDnCheevjBatched(
+        ThrowIfErrorStatus(rocsolverDnCheevjBatched(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
             static_cast<hipComplex*>(work), d.lwork, info, params, d.batch));
         break;
@@ -921,7 +922,7 @@ void Syevj(hipStream_t stream, void** buffers, const char* opaque,
         hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         double* w = static_cast<double*>(buffers[2]);
         ThrowIfErrorStatus(
-            cusolverDnZheevjBatched(handle.get(), jobz, d.uplo, d.n, a, d.n, w,
+            rocsolverDnZheevjBatched(handle.get(), jobz, d.uplo, d.n, a, d.n, w,
                                     static_cast<hipDoubleComplex*>(work),
                                     d.lwork, info, params, d.batch));
         break;
@@ -949,19 +950,19 @@ std::pair<int, py::bytes> BuildGesvdDescriptor(const py::dtype& dtype, int b,
   switch (type) {
     case Type::F32:
       ThrowIfErrorStatus(
-          cusolverDnSgesvd_bufferSize(handle.get(), m, n, &lwork));
+          rocsolverDnSgesvd_bufferSize(handle.get(), m, n, &lwork));
       break;
     case Type::F64:
       ThrowIfErrorStatus(
-          cusolverDnDgesvd_bufferSize(handle.get(), m, n, &lwork));
+          rocsolverDnDgesvd_bufferSize(handle.get(), m, n, &lwork));
       break;
     case Type::C64:
       ThrowIfErrorStatus(
-          cusolverDnCgesvd_bufferSize(handle.get(), m, n, &lwork));
+          rocsolverDnCgesvd_bufferSize(handle.get(), m, n, &lwork));
       break;
     case Type::C128:
       ThrowIfErrorStatus(
-          cusolverDnZgesvd_bufferSize(handle.get(), m, n, &lwork));
+          rocsolverDnZgesvd_bufferSize(handle.get(), m, n, &lwork));
       break;
   }
   signed char jobu, jobvt;
@@ -997,7 +998,7 @@ void Gesvd(hipStream_t stream, void** buffers, const char* opaque,
       float* u = static_cast<float*>(buffers[3]);
       float* vt = static_cast<float*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnSgesvd(handle.get(), d.jobu, d.jobvt, d.m,
+        ThrowIfErrorStatus(rocsolverDnSgesvd(handle.get(), d.jobu, d.jobvt, d.m,
                                             d.n, a, d.m, s, u, d.m, vt, d.n,
                                             static_cast<float*>(work), d.lwork,
                                             /*rwork=*/nullptr, info));
@@ -1015,7 +1016,7 @@ void Gesvd(hipStream_t stream, void** buffers, const char* opaque,
       double* u = static_cast<double*>(buffers[3]);
       double* vt = static_cast<double*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnDgesvd(handle.get(), d.jobu, d.jobvt, d.m,
+        ThrowIfErrorStatus(rocsolverDnDgesvd(handle.get(), d.jobu, d.jobvt, d.m,
                                             d.n, a, d.m, s, u, d.m, vt, d.n,
                                             static_cast<double*>(work), d.lwork,
                                             /*rwork=*/nullptr, info));
@@ -1033,7 +1034,7 @@ void Gesvd(hipStream_t stream, void** buffers, const char* opaque,
       hipComplex* u = static_cast<hipComplex*>(buffers[3]);
       hipComplex* vt = static_cast<hipComplex*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnCgesvd(
+        ThrowIfErrorStatus(rocsolverDnCgesvd(
             handle.get(), d.jobu, d.jobvt, d.m, d.n, a, d.m, s, u, d.m, vt, d.n,
             static_cast<hipComplex*>(work), d.lwork, /*rwork=*/nullptr, info));
         a += d.m * d.n;
@@ -1050,7 +1051,7 @@ void Gesvd(hipStream_t stream, void** buffers, const char* opaque,
       hipDoubleComplex* u = static_cast<hipDoubleComplex*>(buffers[3]);
       hipDoubleComplex* vt = static_cast<hipDoubleComplex*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
-        ThrowIfErrorStatus(cusolverDnZgesvd(
+        ThrowIfErrorStatus(rocsolverDnZgesvd(
             handle.get(), d.jobu, d.jobvt, d.m, d.n, a, d.m, s, u, d.m, vt, d.n,
             static_cast<hipDoubleComplex*>(work), d.lwork,
             /*rwork=*/nullptr, info));
@@ -1071,7 +1072,7 @@ struct GesvdjDescriptor {
   Type type;
   int batch, m, n;
   int lwork;
-  cusolverEigMode_t jobz;
+  rocsolverEigMode_t jobz;
 };
 
 // Returns the workspace size and a descriptor for a gesvdj operation.
@@ -1081,37 +1082,37 @@ std::pair<int, py::bytes> BuildGesvdjDescriptor(const py::dtype& dtype,
   Type type = DtypeToType(dtype);
   auto handle = SolverHandlePool::Borrow();
   int lwork;
-  cusolverEigMode_t jobz =
-      compute_uv ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR;
+  rocsolverEigMode_t jobz =
+      compute_uv ? rocsolver_EIG_MODE_VECTOR : rocsolver_EIG_MODE_NOVECTOR;
   gesvdjInfo_t params;
-  ThrowIfErrorStatus(cusolverDnCreateGesvdjInfo(&params));
+  ThrowIfErrorStatus(rocsolverDnCreateGesvdjInfo(&params));
   std::unique_ptr<gesvdjInfo, void (*)(gesvdjInfo*)> params_cleanup(
-      params, [](gesvdjInfo* p) { cusolverDnDestroyGesvdjInfo(p); });
+      params, [](gesvdjInfo* p) { rocsolverDnDestroyGesvdjInfo(p); });
   if (batch == 1) {
     switch (type) {
       case Type::F32:
-        ThrowIfErrorStatus(cusolverDnSgesvdj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnSgesvdj_bufferSize(
             handle.get(), jobz, /*econ=*/0, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
             /*ldv=*/n, &lwork, params));
         break;
       case Type::F64:
-        ThrowIfErrorStatus(cusolverDnDgesvdj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnDgesvdj_bufferSize(
             handle.get(), jobz, /*econ=*/0, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
             /*ldv=*/n, &lwork, params));
         break;
       case Type::C64:
-        ThrowIfErrorStatus(cusolverDnCgesvdj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnCgesvdj_bufferSize(
             handle.get(), jobz, /*econ=*/0, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
             /*ldv=*/n, &lwork, params));
         break;
       case Type::C128:
-        ThrowIfErrorStatus(cusolverDnZgesvdj_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnZgesvdj_bufferSize(
             handle.get(), jobz, /*econ=*/0, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
@@ -1121,28 +1122,28 @@ std::pair<int, py::bytes> BuildGesvdjDescriptor(const py::dtype& dtype,
   } else {
     switch (type) {
       case Type::F32:
-        ThrowIfErrorStatus(cusolverDnSgesvdjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnSgesvdjBatched_bufferSize(
             handle.get(), jobz, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
             /*ldv=*/n, &lwork, params, batch));
         break;
       case Type::F64:
-        ThrowIfErrorStatus(cusolverDnDgesvdjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnDgesvdjBatched_bufferSize(
             handle.get(), jobz, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
             /*ldv=*/n, &lwork, params, batch));
         break;
       case Type::C64:
-        ThrowIfErrorStatus(cusolverDnCgesvdjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnCgesvdjBatched_bufferSize(
             handle.get(), jobz, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
             /*ldv=*/n, &lwork, params, batch));
         break;
       case Type::C128:
-        ThrowIfErrorStatus(cusolverDnZgesvdjBatched_bufferSize(
+        ThrowIfErrorStatus(rocsolverDnZgesvdjBatched_bufferSize(
             handle.get(), jobz, m, n,
             /*A=*/nullptr, /*lda=*/m, /*S=*/nullptr,
             /*U=*/nullptr, /*ldu=*/m, /*V=*/nullptr,
@@ -1167,9 +1168,9 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
   int* info = static_cast<int*>(buffers[5]);
   void* work = buffers[6];
   gesvdjInfo_t params;
-  ThrowIfErrorStatus(cusolverDnCreateGesvdjInfo(&params));
+  ThrowIfErrorStatus(rocsolverDnCreateGesvdjInfo(&params));
   std::unique_ptr<gesvdjInfo, void (*)(gesvdjInfo*)> params_cleanup(
-      params, [](gesvdjInfo* p) { cusolverDnDestroyGesvdjInfo(p); });
+      params, [](gesvdjInfo* p) { rocsolverDnDestroyGesvdjInfo(p); });
   if (d.batch == 1) {
     switch (d.type) {
       case Type::F32: {
@@ -1177,7 +1178,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         float* s = static_cast<float*>(buffers[2]);
         float* u = static_cast<float*>(buffers[3]);
         float* v = static_cast<float*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnSgesvdj(
+        ThrowIfErrorStatus(rocsolverDnSgesvdj(
             handle.get(), d.jobz, /*econ=*/0, d.m, d.n, a, d.m, s, u, d.m, v,
             d.n, static_cast<float*>(work), d.lwork, info, params));
         break;
@@ -1187,7 +1188,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         double* s = static_cast<double*>(buffers[2]);
         double* u = static_cast<double*>(buffers[3]);
         double* v = static_cast<double*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnDgesvdj(
+        ThrowIfErrorStatus(rocsolverDnDgesvdj(
             handle.get(), d.jobz, /*econ=*/0, d.m, d.n, a, d.m, s, u, d.m, v,
             d.n, static_cast<double*>(work), d.lwork, info, params));
         break;
@@ -1197,7 +1198,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         float* s = static_cast<float*>(buffers[2]);
         hipComplex* u = static_cast<hipComplex*>(buffers[3]);
         hipComplex* v = static_cast<hipComplex*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnCgesvdj(
+        ThrowIfErrorStatus(rocsolverDnCgesvdj(
             handle.get(), d.jobz, /*econ=*/0, d.m, d.n, a, d.m, s, u, d.m, v,
             d.n, static_cast<hipComplex*>(work), d.lwork, info, params));
         break;
@@ -1207,7 +1208,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         double* s = static_cast<double*>(buffers[2]);
         hipDoubleComplex* u = static_cast<hipDoubleComplex*>(buffers[3]);
         hipDoubleComplex* v = static_cast<hipDoubleComplex*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnZgesvdj(
+        ThrowIfErrorStatus(rocsolverDnZgesvdj(
             handle.get(), d.jobz, /*econ=*/0, d.m, d.n, a, d.m, s, u, d.m, v,
             d.n, static_cast<hipDoubleComplex*>(work), d.lwork, info, params));
         break;
@@ -1220,7 +1221,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         float* s = static_cast<float*>(buffers[2]);
         float* u = static_cast<float*>(buffers[3]);
         float* v = static_cast<float*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnSgesvdjBatched(
+        ThrowIfErrorStatus(rocsolverDnSgesvdjBatched(
             handle.get(), d.jobz, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
             static_cast<float*>(work), d.lwork, info, params, d.batch));
         break;
@@ -1230,7 +1231,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         double* s = static_cast<double*>(buffers[2]);
         double* u = static_cast<double*>(buffers[3]);
         double* v = static_cast<double*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnDgesvdjBatched(
+        ThrowIfErrorStatus(rocsolverDnDgesvdjBatched(
             handle.get(), d.jobz, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
             static_cast<double*>(work), d.lwork, info, params, d.batch));
         break;
@@ -1240,7 +1241,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         float* s = static_cast<float*>(buffers[2]);
         hipComplex* u = static_cast<hipComplex*>(buffers[3]);
         hipComplex* v = static_cast<hipComplex*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnCgesvdjBatched(
+        ThrowIfErrorStatus(rocsolverDnCgesvdjBatched(
             handle.get(), d.jobz, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
             static_cast<hipComplex*>(work), d.lwork, info, params, d.batch));
         break;
@@ -1250,7 +1251,7 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
         double* s = static_cast<double*>(buffers[2]);
         hipDoubleComplex* u = static_cast<hipDoubleComplex*>(buffers[3]);
         hipDoubleComplex* v = static_cast<hipDoubleComplex*>(buffers[4]);
-        ThrowIfErrorStatus(cusolverDnZgesvdjBatched(
+        ThrowIfErrorStatus(rocsolverDnZgesvdjBatched(
             handle.get(), d.jobz, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
             static_cast<hipDoubleComplex*>(work), d.lwork, info, params,
             d.batch));
@@ -1262,18 +1263,18 @@ void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
 
 py::dict Registrations() {
   py::dict dict;
-  dict["cusolver_potrf"] = EncapsulateFunction(Potrf);
-  dict["cusolver_getrf"] = EncapsulateFunction(Getrf);
-  dict["cusolver_geqrf"] = EncapsulateFunction(Geqrf);
-  dict["cusolver_orgqr"] = EncapsulateFunction(Orgqr);
-  dict["cusolver_syevd"] = EncapsulateFunction(Syevd);
-  dict["cusolver_syevj"] = EncapsulateFunction(Syevj);
-  dict["cusolver_gesvd"] = EncapsulateFunction(Gesvd);
-  dict["cusolver_gesvdj"] = EncapsulateFunction(Gesvdj);
+  dict["rocsolver_potrf"] = EncapsulateFunction(Potrf);
+  dict["rocsolver_getrf"] = EncapsulateFunction(Getrf);
+  dict["rocsolver_geqrf"] = EncapsulateFunction(Geqrf);
+  dict["rocsolver_orgqr"] = EncapsulateFunction(Orgqr);
+  dict["rocsolver_syevd"] = EncapsulateFunction(Syevd);
+  dict["rocsolver_syevj"] = EncapsulateFunction(Syevj);
+  dict["rocsolver_gesvd"] = EncapsulateFunction(Gesvd);
+  dict["rocsolver_gesvdj"] = EncapsulateFunction(Gesvdj);
   return dict;
 }
 
-PYBIND11_MODULE(cusolver_kernels, m) {
+PYBIND11_MODULE(rocsolver_kernels, m) {
   m.def("registrations", &Registrations);
   m.def("build_potrf_descriptor", &BuildPotrfDescriptor);
   m.def("build_getrf_descriptor", &BuildGetrfDescriptor);
