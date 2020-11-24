@@ -465,7 +465,7 @@ void Getrf(hipStream_t stream, void** buffers, const char* opaque, size_t opaque
     }
   } else {
 
-    auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.n * d.n);
+    auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.m * d.n);
     // TODO(phawkins): ideally we would not need to synchronize here, but to
     // avoid it we need a way to keep the host-side buffer alive until the copy
     // completes.
@@ -551,7 +551,7 @@ void Geqrf(hipStream_t stream, void** buffers, const char* opaque, size_t opaque
       }
     } else {
 
-      auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.n * d.n);
+      auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.m * d.n);
       // TODO(phawkins): ideally we would not need to synchronize here, but to
       // avoid it we need a way to keep the host-side buffer alive until the copy
       // completes.
@@ -587,6 +587,87 @@ void Geqrf(hipStream_t stream, void** buffers, const char* opaque, size_t opaque
   }
 
 
+  // orgqr/ungqr: apply elementary Householder transformations
+  struct OrgqrDescriptor {
+    Type type;
+    int batch, m, n, k;
+  };
+
+
+  std::pair<int, py::bytes> BuildOrgqrDescriptor(const py::dtype& dtype, int b, int m, int n, int k) {
+    Type type = DtypeToType(dtype);
+    std::int64_t size = b * sizeof(void*); // TODO
+    return {size, PackDescriptor(OrgqrDescriptor{type, b, m, n, k})};
+  }
+
+  void Orgqr(hipStream_t stream, void** buffers, const char* opaque, size_t opaque_len) {
+    const OrgqrDescriptor& d = *UnpackDescriptor<OrgqrDescriptor>(opaque, opaque_len);
+    auto handle = BlasHandlePool::Borrow(stream);
+    if (buffers[2] != buffers[0]) {
+      ThrowIfError(hipMemcpyAsync(buffers[2], buffers[0], SizeOfType(d.type) * d.batch * d.m * d.n, hipMemcpyDeviceToDevice, stream));
+    }
+
+    switch (d.type) {
+      case Type::F32: {
+        float* a = static_cast<float*>(buffers[1]);
+        float* ipiv = static_cast<float*>(buffers[2]);
+        for (int i = 0; i < d.batch; ++i) {
+          ThrowIfErrorStatus(rocsolver_sorgqr(handle.get(), d.m, d.n, d.k, a+(i*d.m*d.n), d.m, ipiv+(i*d.k)));
+        }
+        break;
+      }
+      case Type::F64: {
+        double* a = static_cast<double*>(buffers[1]);
+        double* ipiv = static_cast<double*>(buffers[2]);
+        for (int i = 0; i < d.batch; ++i) {
+          ThrowIfErrorStatus(rocsolver_dorgqr(handle.get(), d.m, d.n, d.k, a+(i*d.m*d.n), d.m, ipiv+(i*d.k)));
+        }
+        break;
+      }
+      case Type::C64:{
+        ThrowIfErrorStatus(rocblas_status_not_implemented);
+        break;
+      }
+      case Type::C128:{
+        ThrowIfErrorStatus(rocblas_status_not_implemented);
+        break;
+      }
+
+// not implemented yet in rocsolver
+/*
+      case Type::C64: {
+        rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
+        rocblas_float_complex* ipiv = static_cast<rocblas_float_complex*>(buffers[2]);
+        for (int i = 0; i < d.batch; ++i) {
+          ThrowIfErrorStatus(rocsolver_corgqr(handle.get(), d.m, d.n, d.k, a+(i*d.m*d.n), d.m, ipiv+(i*d.k)));
+        }
+        break;
+      }
+      case Type::C128: {
+        rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
+        rocblas_double_complex* ipiv = static_cast<rocblas_double_complex*>(buffers[2]);
+        for (int i = 0; i < d.batch; ++i) {
+          ThrowIfErrorStatus(rocsolver_zorgqr(handle.get(), d.m, d.n, d.k, a+(i*d.m*d.n), d.m, ipiv+(i*d.k)));
+        }
+        break;
+*/
+    }
+  }
+
+
+
+    // not implemented yet in rocsolver
+    // Symmetric (Hermitian) eigendecomposition, QR algorithm: syevd/heevd
+    // Symmetric (Hermitian) eigendecomposition, Jacobi algorithm: syevj/heevj
+
+
+
+
+
+
+
+
+
 
 
 
@@ -603,7 +684,9 @@ py::dict Registrations() {
   dict["rocsolver_potrf"] = EncapsulateFunction(Potrf);
   dict["rocsolver_getrf"] = EncapsulateFunction(Getrf);
   dict["rocsolver_geqrf"] = EncapsulateFunction(Geqrf);
-
+  dict["rocsolver_orgqr"] = EncapsulateFunction(Orgqr);
+//  dict["rocsolver_syevd"] = EncapsulateFunction(Syevd);
+//  dict["rocsolver_syevj"] = EncapsulateFunction(Syevj);
 
   return dict;
 }
@@ -617,7 +700,9 @@ PYBIND11_MODULE(rocblas_kernels, m) {
   m.def("build_potrf_descriptor", &BuildPotrfDescriptor);
   m.def("build_getrf_descriptor", &BuildGetrfDescriptor);
   m.def("build_geqrf_descriptor", &BuildGeqrfDescriptor);
-
+  m.def("build_orgqr_descriptor", &BuildOrgqrDescriptor);
+//  m.def("build_syevd_descriptor", &BuildSyevdDescriptor);
+//  m.def("build_syevj_descriptor", &BuildSyevjDescriptor);
 }
 
 }  // namespace
