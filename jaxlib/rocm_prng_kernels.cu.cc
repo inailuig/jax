@@ -16,7 +16,7 @@ limitations under the License.
 #include <array>
 #include <cstddef>
 
-#include "jaxlib/cuda_prng_kernels.h"
+#include "jaxlib/rocm_prng_kernels.h"
 #include "jaxlib/gpu_kernel_helpers.h"
 #include "jaxlib/kernel_helpers.h"
 
@@ -102,11 +102,11 @@ struct ThreeFry2x32Descriptor {
   std::int64_t n;
 };
 
-std::string BuildCudaThreeFry2x32Descriptor(std::int64_t n) {
+std::string BuildRocmThreeFry2x32Descriptor(std::int64_t n) {
   return PackDescriptorAsString(ThreeFry2x32Descriptor{n});
 }
 
-void CudaThreeFry2x32(cudaStream_t stream, void** buffers, const char* opaque,
+void RocmThreeFry2x32(hipStream_t stream, void** buffers, const char* opaque,
                       std::size_t opaque_len) {
   std::array<const std::uint32_t*, 2> keys;
   keys[0] = reinterpret_cast<const std::uint32_t*>(buffers[0]);
@@ -122,10 +122,9 @@ void CudaThreeFry2x32(cudaStream_t stream, void** buffers, const char* opaque,
   const int block_dim = 128;
   const std::int64_t grid_dim =
       std::min<std::int64_t>(1024, (descriptor.n + block_dim - 1) / block_dim);
-  ThreeFry2x32Kernel<<<grid_dim, block_dim, /*dynamic_shared_mem_bytes=*/0,
-                       stream>>>(keys[0], keys[1], data[0], data[1], out[0],
+  hipLaunchKernelGGL(ThreeFry2x32Kernel, dim3(grid_dim), dim3(block_dim), /*dynamic_shared_mem_bytes=*/0, stream, keys[0], keys[1], data[0], data[1], out[0],
                                  out[1], descriptor.n);
-  ThrowIfError(cudaGetLastError());
+  ThrowIfError(hipGetLastError());
 }
 
 }  // namespace jax

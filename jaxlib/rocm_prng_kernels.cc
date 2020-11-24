@@ -13,21 +13,27 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef JAXLIB_PRNG_KERNELS_H_
-#define JAXLIB_PRNG_KERNELS_H_
+#include "jaxlib/rocm_prng_kernels.h"
 
-#include <cstddef>
-#include <string>
-
-#include "third_party/gpus/cuda/include/cuda_runtime_api.h"
+#include "jaxlib/kernel_pybind11_helpers.h"
+#include "include/pybind11/pybind11.h"
 
 namespace jax {
+namespace {
 
-std::string BuildCudaThreeFry2x32Descriptor(std::int64_t n);
+pybind11::dict Registrations() {
+  pybind11::dict dict;
+  dict["rocm_threefry2x32"] = EncapsulateFunction(RocmThreeFry2x32);
+  return dict;
+}
 
-void CudaThreeFry2x32(cudaStream_t stream, void** buffers, const char* opaque,
-                      std::size_t opaque_len);
+PYBIND11_MODULE(rocm_prng_kernels, m) {
+  m.def("registrations", &Registrations);
+  m.def("rocm_threefry2x32_descriptor", [](std::int64_t n) {
+      std::string result = BuildRocmThreeFry2x32Descriptor(n);
+      return pybind11::bytes(result);
+    });
+}
 
+}  // namespace
 }  // namespace jax
-
-#endif  // JAXLIB_PRNG_KERNELS_H_

@@ -22,8 +22,8 @@ import numpy as np
 from jaxlib import xla_client
 
 try:
-  from jaxlib import cuda_prng_kernels
-  for _name, _value in cuda_prng_kernels.registrations().items():
+  from jaxlib import rocm_prng_kernels
+  for _name, _value in rocm_prng_kernels.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="gpu")
 except ImportError:
   pass
@@ -48,11 +48,11 @@ def threefry2x32(c, keys, data):
     assert dims == x_shape.dimensions(), (dims, x_shape)
   ndims = len(dims)
 
-  opaque = cuda_prng_kernels.cuda_threefry2x32_descriptor(_prod(dims))
+  opaque = rocm_prng_kernels.rocm_threefry2x32_descriptor(_prod(dims))
   layout = tuple(range(ndims - 1, -1, -1))
   shape = xla_client.Shape.array_shape(dtype, dims, layout)
   return xla_client.ops.CustomCallWithLayout(
-      c, b"cuda_threefry2x32",
+      c, b"rocm_threefry2x32",
       operands=(keys[0], keys[1], data[0], data[1]),
       shape_with_layout=xla_client.Shape.tuple_shape([shape, shape]),
       operand_shapes_with_layout=(shape,) * 4,

@@ -25,9 +25,9 @@ limitations under the License.
 #include "absl/memory/memory.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
-#include "third_party/gpus/cuda/include/cuda.h"
-#include "third_party/gpus/cuda/include/cuda_runtime_api.h"
-#include "third_party/gpus/cuda/include/cusolverDn.h"
+#include "third_party/gpus/rocm/include/hip/hip_runtime.h"
+#include "third_party/gpus/rocm/include/hip/hip_runtime_api.h"
+#include "third_party/gpus/rocm/include/cusolverDn.h"
 #include "include/pybind11/numpy.h"
 #include "include/pybind11/pybind11.h"
 #include "include/pybind11/stl.h"
@@ -115,7 +115,7 @@ class SolverHandlePool {
 
   // Borrows a handle from the pool. If 'stream' is non-null, sets the stream
   // associated with the handle.
-  static Handle Borrow(cudaStream_t stream = nullptr);
+  static Handle Borrow(hipStream_t stream = nullptr);
 
  private:
   static SolverHandlePool* Instance();
@@ -132,7 +132,7 @@ class SolverHandlePool {
 }
 
 /*static*/ SolverHandlePool::Handle SolverHandlePool::Borrow(
-    cudaStream_t stream) {
+    hipStream_t stream) {
   SolverHandlePool* pool = Instance();
   absl::MutexLock lock(&pool->mu_);
   cusolverDnHandle_t handle;
@@ -184,9 +184,9 @@ int SizeOfType(Type type) {
     case Type::F64:
       return sizeof(double);
     case Type::C64:
-      return sizeof(cuComplex);
+      return sizeof(hipComplex);
     case Type::C128:
-      return sizeof(cuDoubleComplex);
+      return sizeof(hipDoubleComplex);
   }
 }
 
@@ -194,7 +194,7 @@ int SizeOfType(Type type) {
 
 struct PotrfDescriptor {
   Type type;
-  cublasFillMode_t uplo;
+  hipblasFillMode_t uplo;
   std::int64_t batch, n;
   int lwork;
 };
@@ -206,8 +206,8 @@ std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype,
   auto handle = SolverHandlePool::Borrow();
   int lwork;
   std::int64_t workspace_size;
-  cublasFillMode_t uplo =
-      lower ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
+  hipblasFillMode_t uplo =
+      lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
   if (b == 1) {
     switch (type) {
       case Type::F32:
@@ -226,13 +226,13 @@ std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype,
         ThrowIfErrorStatus(cusolverDnCpotrf_bufferSize(handle.get(), uplo, n,
                                                        /*A=*/nullptr,
                                                        /*lda=*/n, &lwork));
-        workspace_size = lwork * sizeof(cuComplex);
+        workspace_size = lwork * sizeof(hipComplex);
         break;
       case Type::C128:
         ThrowIfErrorStatus(cusolverDnZpotrf_bufferSize(handle.get(), uplo, n,
                                                        /*A=*/nullptr,
                                                        /*lda=*/n, &lwork));
-        workspace_size = lwork * sizeof(cuDoubleComplex);
+        workspace_size = lwork * sizeof(hipDoubleComplex);
         break;
     }
   } else {
@@ -243,15 +243,15 @@ std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype,
           PackDescriptor(PotrfDescriptor{type, uplo, b, n, lwork})};
 }
 
-void Potrf(cudaStream_t stream, void** buffers, const char* opaque,
+void Potrf(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len) {
   const PotrfDescriptor& d =
       *UnpackDescriptor<PotrfDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
   if (buffers[1] != buffers[0]) {
-    ThrowIfError(cudaMemcpyAsync(buffers[1], buffers[0],
+    ThrowIfError(hipMemcpyAsync(buffers[1], buffers[0],
                                  SizeOfType(d.type) * d.batch * d.n * d.n,
-                                 cudaMemcpyDeviceToDevice, stream));
+                                 hipMemcpyDeviceToDevice, stream));
   }
 
   int* info = static_cast<int*>(buffers[2]);
@@ -273,17 +273,17 @@ void Potrf(cudaStream_t stream, void** buffers, const char* opaque,
         break;
       }
       case Type::C64: {
-        cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+        hipComplex* a = static_cast<hipComplex*>(buffers[1]);
         ThrowIfErrorStatus(cusolverDnCpotrf(handle.get(), d.uplo, d.n, a, d.n,
-                                            static_cast<cuComplex*>(workspace),
+                                            static_cast<hipComplex*>(workspace),
                                             d.lwork, info));
         break;
       }
       case Type::C128: {
-        cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+        hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         ThrowIfErrorStatus(cusolverDnZpotrf(
             handle.get(), d.uplo, d.n, a, d.n,
-            static_cast<cuDoubleComplex*>(workspace), d.lwork, info));
+            static_cast<hipDoubleComplex*>(workspace), d.lwork, info));
         break;
       }
     }
@@ -292,7 +292,7 @@ void Potrf(cudaStream_t stream, void** buffers, const char* opaque,
         stream, buffers[1], workspace, d.batch, SizeOfType(d.type) * d.n * d.n);
     // Make sure that accesses to buffer_ptrs_host complete before we delete it.
     // TODO(phawkins): avoid synchronization here.
-    ThrowIfError(cudaStreamSynchronize(stream));
+    ThrowIfError(hipStreamSynchronize(stream));
     switch (d.type) {
       case Type::F32: {
         ThrowIfErrorStatus(cusolverDnSpotrfBatched(
@@ -309,14 +309,14 @@ void Potrf(cudaStream_t stream, void** buffers, const char* opaque,
       }
       case Type::C64: {
         ThrowIfErrorStatus(cusolverDnCpotrfBatched(
-            handle.get(), d.uplo, d.n, static_cast<cuComplex**>(workspace), d.n,
+            handle.get(), d.uplo, d.n, static_cast<hipComplex**>(workspace), d.n,
             info, d.batch));
         break;
       }
       case Type::C128: {
         ThrowIfErrorStatus(cusolverDnZpotrfBatched(
             handle.get(), d.uplo, d.n,
-            static_cast<cuDoubleComplex**>(workspace), d.n, info, d.batch));
+            static_cast<hipDoubleComplex**>(workspace), d.n, info, d.batch));
         break;
       }
     }
@@ -361,17 +361,17 @@ std::pair<int, py::bytes> BuildGetrfDescriptor(const py::dtype& dtype, int b,
   return {lwork, PackDescriptor(GetrfDescriptor{type, b, m, n})};
 }
 
-void Getrf(cudaStream_t stream, void** buffers, const char* opaque,
+void Getrf(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len) {
   const GetrfDescriptor& d =
       *UnpackDescriptor<GetrfDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
   if (buffers[1] != buffers[0]) {
-    ThrowIfError(cudaMemcpyAsync(
+    ThrowIfError(hipMemcpyAsync(
         buffers[1], buffers[0],
         SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
             static_cast<std::int64_t>(d.m) * static_cast<std::int64_t>(d.n),
-        cudaMemcpyDeviceToDevice, stream));
+        hipMemcpyDeviceToDevice, stream));
   }
 
   int* ipiv = static_cast<int*>(buffers[2]);
@@ -403,10 +403,10 @@ void Getrf(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C64: {
-      cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+      hipComplex* a = static_cast<hipComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnCgetrf(handle.get(), d.m, d.n, a, d.m,
-                                            static_cast<cuComplex*>(workspace),
+                                            static_cast<hipComplex*>(workspace),
                                             ipiv, info));
         a += d.m * d.n;
         ipiv += std::min(d.m, d.n);
@@ -415,11 +415,11 @@ void Getrf(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C128: {
-      cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+      hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnZgetrf(
             handle.get(), d.m, d.n, a, d.m,
-            static_cast<cuDoubleComplex*>(workspace), ipiv, info));
+            static_cast<hipDoubleComplex*>(workspace), ipiv, info));
         a += d.m * d.n;
         ipiv += std::min(d.m, d.n);
         ++info;
@@ -467,17 +467,17 @@ std::pair<int, py::bytes> BuildGeqrfDescriptor(const py::dtype& dtype, int b,
   return {lwork, PackDescriptor(GeqrfDescriptor{type, b, m, n, lwork})};
 }
 
-void Geqrf(cudaStream_t stream, void** buffers, const char* opaque,
+void Geqrf(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len) {
   const GeqrfDescriptor& d =
       *UnpackDescriptor<GeqrfDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
   if (buffers[1] != buffers[0]) {
-    ThrowIfError(cudaMemcpyAsync(
+    ThrowIfError(hipMemcpyAsync(
         buffers[1], buffers[0],
         SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
             static_cast<std::int64_t>(d.m) * static_cast<std::int64_t>(d.n),
-        cudaMemcpyDeviceToDevice, stream));
+        hipMemcpyDeviceToDevice, stream));
   }
 
   int* info = static_cast<int*>(buffers[3]);
@@ -510,11 +510,11 @@ void Geqrf(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C64: {
-      cuComplex* a = static_cast<cuComplex*>(buffers[1]);
-      cuComplex* tau = static_cast<cuComplex*>(buffers[2]);
+      hipComplex* a = static_cast<hipComplex*>(buffers[1]);
+      hipComplex* tau = static_cast<hipComplex*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnCgeqrf(handle.get(), d.m, d.n, a, d.m, tau,
-                                            static_cast<cuComplex*>(workspace),
+                                            static_cast<hipComplex*>(workspace),
                                             d.lwork, info));
         a += d.m * d.n;
         tau += std::min(d.m, d.n);
@@ -523,12 +523,12 @@ void Geqrf(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C128: {
-      cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
-      cuDoubleComplex* tau = static_cast<cuDoubleComplex*>(buffers[2]);
+      hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
+      hipDoubleComplex* tau = static_cast<hipDoubleComplex*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnZgeqrf(
             handle.get(), d.m, d.n, a, d.m, tau,
-            static_cast<cuDoubleComplex*>(workspace), d.lwork, info));
+            static_cast<hipDoubleComplex*>(workspace), d.lwork, info));
         a += d.m * d.n;
         tau += std::min(d.m, d.n);
         ++info;
@@ -580,17 +580,17 @@ std::pair<int, py::bytes> BuildOrgqrDescriptor(const py::dtype& dtype, int b,
   return {lwork, PackDescriptor(OrgqrDescriptor{type, b, m, n, k, lwork})};
 }
 
-void Orgqr(cudaStream_t stream, void** buffers, const char* opaque,
+void Orgqr(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len) {
   const OrgqrDescriptor& d =
       *UnpackDescriptor<OrgqrDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
   if (buffers[2] != buffers[0]) {
-    ThrowIfError(cudaMemcpyAsync(
+    ThrowIfError(hipMemcpyAsync(
         buffers[2], buffers[0],
         SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
             static_cast<std::int64_t>(d.m) * static_cast<std::int64_t>(d.n),
-        cudaMemcpyDeviceToDevice, stream));
+        hipMemcpyDeviceToDevice, stream));
   }
 
   int* info = static_cast<int*>(buffers[3]);
@@ -623,12 +623,12 @@ void Orgqr(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C64: {
-      cuComplex* a = static_cast<cuComplex*>(buffers[2]);
-      cuComplex* tau = static_cast<cuComplex*>(buffers[1]);
+      hipComplex* a = static_cast<hipComplex*>(buffers[2]);
+      hipComplex* tau = static_cast<hipComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnCungqr(
             handle.get(), d.m, d.n, d.k, a, d.m, tau,
-            static_cast<cuComplex*>(workspace), d.lwork, info));
+            static_cast<hipComplex*>(workspace), d.lwork, info));
         a += d.m * d.n;
         tau += d.k;
         ++info;
@@ -636,12 +636,12 @@ void Orgqr(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C128: {
-      cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[2]);
-      cuDoubleComplex* tau = static_cast<cuDoubleComplex*>(buffers[1]);
+      hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[2]);
+      hipDoubleComplex* tau = static_cast<hipDoubleComplex*>(buffers[1]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnZungqr(
             handle.get(), d.m, d.n, d.k, a, d.m, tau,
-            static_cast<cuDoubleComplex*>(workspace), d.lwork, info));
+            static_cast<hipDoubleComplex*>(workspace), d.lwork, info));
         a += d.m * d.n;
         tau += d.k;
         ++info;
@@ -655,7 +655,7 @@ void Orgqr(cudaStream_t stream, void** buffers, const char* opaque,
 
 struct SyevdDescriptor {
   Type type;
-  cublasFillMode_t uplo;
+  hipblasFillMode_t uplo;
   int batch, n;
   int lwork;
 };
@@ -667,8 +667,8 @@ std::pair<int, py::bytes> BuildSyevdDescriptor(const py::dtype& dtype,
   auto handle = SolverHandlePool::Borrow();
   int lwork;
   cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_VECTOR;
-  cublasFillMode_t uplo =
-      lower ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
+  hipblasFillMode_t uplo =
+      lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
   switch (type) {
     case Type::F32:
       ThrowIfErrorStatus(cusolverDnSsyevd_bufferSize(
@@ -694,16 +694,16 @@ std::pair<int, py::bytes> BuildSyevdDescriptor(const py::dtype& dtype,
   return {lwork, PackDescriptor(SyevdDescriptor{type, uplo, b, n, lwork})};
 }
 
-void Syevd(cudaStream_t stream, void** buffers, const char* opaque,
+void Syevd(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len) {
   const SyevdDescriptor& d =
       *UnpackDescriptor<SyevdDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
-  ThrowIfError(cudaMemcpyAsync(
+  ThrowIfError(hipMemcpyAsync(
       buffers[1], buffers[0],
       SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
           static_cast<std::int64_t>(d.n) * static_cast<std::int64_t>(d.n),
-      cudaMemcpyDeviceToDevice, stream));
+      hipMemcpyDeviceToDevice, stream));
   cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_VECTOR;
   int* info = static_cast<int*>(buffers[3]);
   void* work = buffers[4];
@@ -735,12 +735,12 @@ void Syevd(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C64: {
-      cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+      hipComplex* a = static_cast<hipComplex*>(buffers[1]);
       float* w = static_cast<float*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(
             cusolverDnCheevd(handle.get(), jobz, d.uplo, d.n, a, d.n, w,
-                             static_cast<cuComplex*>(work), d.lwork, info));
+                             static_cast<hipComplex*>(work), d.lwork, info));
         a += d.n * d.n;
         w += d.n;
         ++info;
@@ -748,12 +748,12 @@ void Syevd(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C128: {
-      cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+      hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
       double* w = static_cast<double*>(buffers[2]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnZheevd(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
-            static_cast<cuDoubleComplex*>(work), d.lwork, info));
+            static_cast<hipDoubleComplex*>(work), d.lwork, info));
         a += d.n * d.n;
         w += d.n;
         ++info;
@@ -768,7 +768,7 @@ void Syevd(cudaStream_t stream, void** buffers, const char* opaque,
 
 struct SyevjDescriptor {
   Type type;
-  cublasFillMode_t uplo;
+  hipblasFillMode_t uplo;
   int batch, n;
   int lwork;
 };
@@ -784,8 +784,8 @@ std::pair<int, py::bytes> BuildSyevjDescriptor(const py::dtype& dtype,
   std::unique_ptr<syevjInfo, void (*)(syevjInfo*)> params_cleanup(
       params, [](syevjInfo* p) { cusolverDnDestroySyevjInfo(p); });
   cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_VECTOR;
-  cublasFillMode_t uplo =
-      lower ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
+  hipblasFillMode_t uplo =
+      lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
   if (batch == 1) {
     switch (type) {
       case Type::F32:
@@ -836,17 +836,17 @@ std::pair<int, py::bytes> BuildSyevjDescriptor(const py::dtype& dtype,
   return {lwork, PackDescriptor(SyevjDescriptor{type, uplo, batch, n, lwork})};
 }
 
-void Syevj(cudaStream_t stream, void** buffers, const char* opaque,
+void Syevj(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len) {
   const SyevjDescriptor& d =
       *UnpackDescriptor<SyevjDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
   if (buffers[1] != buffers[0]) {
-    ThrowIfError(cudaMemcpyAsync(
+    ThrowIfError(hipMemcpyAsync(
         buffers[1], buffers[0],
         SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
             static_cast<std::int64_t>(d.n) * static_cast<std::int64_t>(d.n),
-        cudaMemcpyDeviceToDevice, stream));
+        hipMemcpyDeviceToDevice, stream));
   }
   syevjInfo_t params;
   ThrowIfErrorStatus(cusolverDnCreateSyevjInfo(&params));
@@ -875,19 +875,19 @@ void Syevj(cudaStream_t stream, void** buffers, const char* opaque,
         break;
       }
       case Type::C64: {
-        cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+        hipComplex* a = static_cast<hipComplex*>(buffers[1]);
         float* w = static_cast<float*>(buffers[2]);
         ThrowIfErrorStatus(cusolverDnCheevj(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
-            static_cast<cuComplex*>(work), d.lwork, info, params));
+            static_cast<hipComplex*>(work), d.lwork, info, params));
         break;
       }
       case Type::C128: {
-        cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+        hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         double* w = static_cast<double*>(buffers[2]);
         ThrowIfErrorStatus(cusolverDnZheevj(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
-            static_cast<cuDoubleComplex*>(work), d.lwork, info, params));
+            static_cast<hipDoubleComplex*>(work), d.lwork, info, params));
         break;
       }
     }
@@ -910,19 +910,19 @@ void Syevj(cudaStream_t stream, void** buffers, const char* opaque,
         break;
       }
       case Type::C64: {
-        cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+        hipComplex* a = static_cast<hipComplex*>(buffers[1]);
         float* w = static_cast<float*>(buffers[2]);
         ThrowIfErrorStatus(cusolverDnCheevjBatched(
             handle.get(), jobz, d.uplo, d.n, a, d.n, w,
-            static_cast<cuComplex*>(work), d.lwork, info, params, d.batch));
+            static_cast<hipComplex*>(work), d.lwork, info, params, d.batch));
         break;
       }
       case Type::C128: {
-        cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+        hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         double* w = static_cast<double*>(buffers[2]);
         ThrowIfErrorStatus(
             cusolverDnZheevjBatched(handle.get(), jobz, d.uplo, d.n, a, d.n, w,
-                                    static_cast<cuDoubleComplex*>(work),
+                                    static_cast<hipDoubleComplex*>(work),
                                     d.lwork, info, params, d.batch));
         break;
       }
@@ -978,16 +978,16 @@ std::pair<int, py::bytes> BuildGesvdDescriptor(const py::dtype& dtype, int b,
           PackDescriptor(GesvdDescriptor{type, b, m, n, lwork, jobu, jobvt})};
 }
 
-void Gesvd(cudaStream_t stream, void** buffers, const char* opaque,
+void Gesvd(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len) {
   const GesvdDescriptor& d =
       *UnpackDescriptor<GesvdDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
-  ThrowIfError(cudaMemcpyAsync(
+  ThrowIfError(hipMemcpyAsync(
       buffers[1], buffers[0],
       SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
           static_cast<std::int64_t>(d.m) * static_cast<std::int64_t>(d.n),
-      cudaMemcpyDeviceToDevice, stream));
+      hipMemcpyDeviceToDevice, stream));
   int* info = static_cast<int*>(buffers[5]);
   void* work = buffers[6];
   switch (d.type) {
@@ -1028,14 +1028,14 @@ void Gesvd(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C64: {
-      cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+      hipComplex* a = static_cast<hipComplex*>(buffers[1]);
       float* s = static_cast<float*>(buffers[2]);
-      cuComplex* u = static_cast<cuComplex*>(buffers[3]);
-      cuComplex* vt = static_cast<cuComplex*>(buffers[4]);
+      hipComplex* u = static_cast<hipComplex*>(buffers[3]);
+      hipComplex* vt = static_cast<hipComplex*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnCgesvd(
             handle.get(), d.jobu, d.jobvt, d.m, d.n, a, d.m, s, u, d.m, vt, d.n,
-            static_cast<cuComplex*>(work), d.lwork, /*rwork=*/nullptr, info));
+            static_cast<hipComplex*>(work), d.lwork, /*rwork=*/nullptr, info));
         a += d.m * d.n;
         s += std::min(d.m, d.n);
         u += d.m * d.m;
@@ -1045,14 +1045,14 @@ void Gesvd(cudaStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C128: {
-      cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+      hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
       double* s = static_cast<double*>(buffers[2]);
-      cuDoubleComplex* u = static_cast<cuDoubleComplex*>(buffers[3]);
-      cuDoubleComplex* vt = static_cast<cuDoubleComplex*>(buffers[4]);
+      hipDoubleComplex* u = static_cast<hipDoubleComplex*>(buffers[3]);
+      hipDoubleComplex* vt = static_cast<hipDoubleComplex*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
         ThrowIfErrorStatus(cusolverDnZgesvd(
             handle.get(), d.jobu, d.jobvt, d.m, d.n, a, d.m, s, u, d.m, vt, d.n,
-            static_cast<cuDoubleComplex*>(work), d.lwork,
+            static_cast<hipDoubleComplex*>(work), d.lwork,
             /*rwork=*/nullptr, info));
         a += d.m * d.n;
         s += std::min(d.m, d.n);
@@ -1154,16 +1154,16 @@ std::pair<int, py::bytes> BuildGesvdjDescriptor(const py::dtype& dtype,
           PackDescriptor(GesvdjDescriptor{type, batch, m, n, lwork, jobz})};
 }
 
-void Gesvdj(cudaStream_t stream, void** buffers, const char* opaque,
+void Gesvdj(hipStream_t stream, void** buffers, const char* opaque,
             size_t opaque_len) {
   const GesvdjDescriptor& d =
       *UnpackDescriptor<GesvdjDescriptor>(opaque, opaque_len);
   auto handle = SolverHandlePool::Borrow(stream);
-  ThrowIfError(cudaMemcpyAsync(
+  ThrowIfError(hipMemcpyAsync(
       buffers[1], buffers[0],
       SizeOfType(d.type) * static_cast<std::int64_t>(d.batch) *
           static_cast<std::int64_t>(d.m) * static_cast<std::int64_t>(d.n),
-      cudaMemcpyDeviceToDevice, stream));
+      hipMemcpyDeviceToDevice, stream));
   int* info = static_cast<int*>(buffers[5]);
   void* work = buffers[6];
   gesvdjInfo_t params;
@@ -1193,23 +1193,23 @@ void Gesvdj(cudaStream_t stream, void** buffers, const char* opaque,
         break;
       }
       case Type::C64: {
-        cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+        hipComplex* a = static_cast<hipComplex*>(buffers[1]);
         float* s = static_cast<float*>(buffers[2]);
-        cuComplex* u = static_cast<cuComplex*>(buffers[3]);
-        cuComplex* v = static_cast<cuComplex*>(buffers[4]);
+        hipComplex* u = static_cast<hipComplex*>(buffers[3]);
+        hipComplex* v = static_cast<hipComplex*>(buffers[4]);
         ThrowIfErrorStatus(cusolverDnCgesvdj(
             handle.get(), d.jobz, /*econ=*/0, d.m, d.n, a, d.m, s, u, d.m, v,
-            d.n, static_cast<cuComplex*>(work), d.lwork, info, params));
+            d.n, static_cast<hipComplex*>(work), d.lwork, info, params));
         break;
       }
       case Type::C128: {
-        cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+        hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         double* s = static_cast<double*>(buffers[2]);
-        cuDoubleComplex* u = static_cast<cuDoubleComplex*>(buffers[3]);
-        cuDoubleComplex* v = static_cast<cuDoubleComplex*>(buffers[4]);
+        hipDoubleComplex* u = static_cast<hipDoubleComplex*>(buffers[3]);
+        hipDoubleComplex* v = static_cast<hipDoubleComplex*>(buffers[4]);
         ThrowIfErrorStatus(cusolverDnZgesvdj(
             handle.get(), d.jobz, /*econ=*/0, d.m, d.n, a, d.m, s, u, d.m, v,
-            d.n, static_cast<cuDoubleComplex*>(work), d.lwork, info, params));
+            d.n, static_cast<hipDoubleComplex*>(work), d.lwork, info, params));
         break;
       }
     }
@@ -1236,23 +1236,23 @@ void Gesvdj(cudaStream_t stream, void** buffers, const char* opaque,
         break;
       }
       case Type::C64: {
-        cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+        hipComplex* a = static_cast<hipComplex*>(buffers[1]);
         float* s = static_cast<float*>(buffers[2]);
-        cuComplex* u = static_cast<cuComplex*>(buffers[3]);
-        cuComplex* v = static_cast<cuComplex*>(buffers[4]);
+        hipComplex* u = static_cast<hipComplex*>(buffers[3]);
+        hipComplex* v = static_cast<hipComplex*>(buffers[4]);
         ThrowIfErrorStatus(cusolverDnCgesvdjBatched(
             handle.get(), d.jobz, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
-            static_cast<cuComplex*>(work), d.lwork, info, params, d.batch));
+            static_cast<hipComplex*>(work), d.lwork, info, params, d.batch));
         break;
       }
       case Type::C128: {
-        cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+        hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         double* s = static_cast<double*>(buffers[2]);
-        cuDoubleComplex* u = static_cast<cuDoubleComplex*>(buffers[3]);
-        cuDoubleComplex* v = static_cast<cuDoubleComplex*>(buffers[4]);
+        hipDoubleComplex* u = static_cast<hipDoubleComplex*>(buffers[3]);
+        hipDoubleComplex* v = static_cast<hipDoubleComplex*>(buffers[4]);
         ThrowIfErrorStatus(cusolverDnZgesvdjBatched(
             handle.get(), d.jobz, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
-            static_cast<cuDoubleComplex*>(work), d.lwork, info, params,
+            static_cast<hipDoubleComplex*>(work), d.lwork, info, params,
             d.batch));
         break;
       }

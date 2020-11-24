@@ -22,14 +22,14 @@ limitations under the License.
 
 namespace jax {
 
-void ThrowIfError(cudaError_t error) {
-  if (error != cudaSuccess) {
+void ThrowIfError(hipError_t error) {
+  if (error != hipSuccess) {
     throw std::runtime_error(
-        absl::StrCat("CUDA operation failed: ", cudaGetErrorString(error)));
+        absl::StrCat("CUDA operation failed: ", hipGetErrorString(error)));
   }
 }
 
-std::unique_ptr<void* []> MakeBatchPointers(cudaStream_t stream, void* buffer,
+std::unique_ptr<void* []> MakeBatchPointers(hipStream_t stream, void* buffer,
                                            void* dev_ptrs, int batch,
                                            int batch_elem_size) {
   char* ptr = static_cast<char*>(buffer);
@@ -38,8 +38,8 @@ std::unique_ptr<void* []> MakeBatchPointers(cudaStream_t stream, void* buffer,
     host_ptrs[i] = ptr;
     ptr += batch_elem_size;
   }
-  ThrowIfError(cudaMemcpyAsync(dev_ptrs, host_ptrs.get(), sizeof(void*) * batch,
-                               cudaMemcpyHostToDevice, stream));
+  ThrowIfError(hipMemcpyAsync(dev_ptrs, host_ptrs.get(), sizeof(void*) * batch,
+                               hipMemcpyHostToDevice, stream));
   return host_ptrs;
 }
 }  // namespace jax

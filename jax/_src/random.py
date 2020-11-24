@@ -26,7 +26,7 @@ from jax.api import jit, vmap
 from jax._src.numpy.lax_numpy import _constant_like, asarray
 from jax.lib import xla_bridge
 from jax.lib import xla_client
-from jax.lib import cuda_prng
+from jax.lib import rocm_prng
 from jax import core
 from jax.numpy.linalg import cholesky
 from jax.interpreters import ad
@@ -199,7 +199,7 @@ def _threefry2x32_gpu_translation_rule(c, k1, k2, x1, x2):
     ndims = c.get_shape(x).rank()
     return xla_client.ops.BroadcastInDim(x, shape,
                                          tuple(range(rank - ndims, rank)))
-  return cuda_prng.threefry2x32(
+  return rocm_prng.threefry2x32(
       c, (_broadcast(k1), _broadcast(k2)), (_broadcast(x1), _broadcast(x2)))
 
 threefry2x32_p = core.Primitive("threefry2x32")
@@ -213,7 +213,7 @@ xla.translations[threefry2x32_p] = xla.lower_fun(
 xla.backend_specific_translations['cpu'][threefry2x32_p] = xla.lower_fun(
     partial(_threefry2x32_lowering, use_rolled_loops=True),
     multiple_results=True)
-if cuda_prng:
+if rocm_prng:
   xla.backend_specific_translations['gpu'][threefry2x32_p] = \
       _threefry2x32_gpu_translation_rule
 

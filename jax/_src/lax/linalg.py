@@ -32,8 +32,8 @@ from jax._src.lax.lax import (
     _input_dtype, _broadcasting_select)
 from jax._src.lax import lax as lax_internal
 from jax.lib import lapack
-from jax.lib import cusolver
-
+#from jax.lib import cusolver
+cusolver = None
 from jax.lib import xla_client
 from jax.lib import xla_bridge as xb
 
@@ -303,8 +303,8 @@ def _cholesky_cpu_gpu_translation_rule(potrf_impl, c, operand):
 xla.backend_specific_translations['cpu'][cholesky_p] = partial(
   _cholesky_cpu_gpu_translation_rule, lapack.potrf)
 
-xla.backend_specific_translations['gpu'][cholesky_p] = partial(
-  _cholesky_cpu_gpu_translation_rule, cusolver.potrf)
+#xla.backend_specific_translations['gpu'][cholesky_p] = partial(
+#  _cholesky_cpu_gpu_translation_rule, cusolver.potrf)
 
 # Asymmetric eigendecomposition
 
@@ -478,8 +478,8 @@ _cpu_syevd = lapack.syevd
 xla.backend_specific_translations['cpu'][eigh_p] = partial(
   _eigh_cpu_gpu_translation_rule, _cpu_syevd)
 
-xla.backend_specific_translations['gpu'][eigh_p] = partial(
-  _eigh_cpu_gpu_translation_rule, cusolver.syevd)
+#xla.backend_specific_translations['gpu'][eigh_p] = partial(
+#  _eigh_cpu_gpu_translation_rule, cusolver.syevd)
 
 
 
@@ -847,8 +847,8 @@ batching.primitive_batchers[lu_p] = _lu_batching_rule
 xla.backend_specific_translations['cpu'][lu_p] = partial(
   _lu_cpu_gpu_translation_rule, lapack.getrf)
 
-xla.backend_specific_translations['gpu'][lu_p] = partial(
-  _lu_cpu_gpu_translation_rule, cusolver.getrf)
+#xla.backend_specific_translations['gpu'][lu_p] = partial(
+#  _lu_cpu_gpu_translation_rule, cusolver.getrf)
 
 xla.backend_specific_translations['tpu'][lu_p] = _lu_tpu_translation_rule
 
@@ -1038,8 +1038,8 @@ batching.primitive_batchers[qr_p] = qr_batching_rule
 xla.backend_specific_translations['cpu'][qr_p] = partial(
   _qr_cpu_gpu_translation_rule, lapack.geqrf, lapack.orgqr)
 
-xla.backend_specific_translations['gpu'][qr_p] = partial(
-  _qr_cpu_gpu_translation_rule, cusolver.geqrf, cusolver.orgqr)
+#xla.backend_specific_translations['gpu'][qr_p] = partial(
+#  _qr_cpu_gpu_translation_rule, cusolver.geqrf, cusolver.orgqr)
 
 
 # Singular value decomposition
@@ -1161,5 +1161,5 @@ xla.translations[svd_p] = svd_translation_rule
 xla.backend_specific_translations['cpu'][svd_p] = partial(
   _svd_cpu_gpu_translation_rule, lapack.gesdd)
 
-xla.backend_specific_translations['gpu'][svd_p] = partial(
-  _svd_cpu_gpu_translation_rule, cusolver.gesvd)
+#xla.backend_specific_translations['gpu'][svd_p] = partial(
+#  _svd_cpu_gpu_translation_rule, cusolver.gesvd)

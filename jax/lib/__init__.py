@@ -16,7 +16,9 @@
 # checking on import.
 
 __all__ = [
-  'cuda_prng', 'cusolver', 'jaxlib', 'lapack',
+  'rocm_prng',
+# 'cusolver',
+  'jaxlib', 'lapack',
   'pytree', 'tpu_client', 'version', 'xla_client'
 ]
 
@@ -57,11 +59,11 @@ if version <  (0, 1, 53):
 else:
   pytree = xla_client._xla.pytree
   jax_jit = xla_client._xla.jax_jit
-from jaxlib import cusolver
+#from jaxlib import cusolver
 try:
-  from jaxlib import cuda_prng
+  from jaxlib import rocm_prng
 except ImportError:
-  cuda_prng = None
+  rocm_prng = None
 
 try:
   from jaxlib import tpu_client  # pytype: disable=import-error
