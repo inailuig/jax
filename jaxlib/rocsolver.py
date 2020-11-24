@@ -115,7 +115,7 @@ def potrf(c, a, lower):
 
   lwork, opaque = rocsolver_kernels.build_potrf_descriptor(
       np.dtype(dtype), lower, batch, n)
-  kernel = b"rocolver_potrf"
+  kernel = b"rocsolver_potrf"
 
   out = _ops.CustomCallWithLayout(
       c, kernel,
@@ -153,7 +153,7 @@ def getrf(c, a):
     workspace = _Shape.array_shape(np.dtype(np.int8), (lwork,), (0,))
     kernel = b"cublas_getrf_batched"
   else:
-    lwork, opaque = rocolver_kernels.build_getrf_descriptor(
+    lwork, opaque = rocsolver_kernels.build_getrf_descriptor(
         np.dtype(dtype), batch, m, n)
     workspace = _Shape.array_shape(dtype, (lwork,), (0,))
     kernel = b"rocsolver_getrf"

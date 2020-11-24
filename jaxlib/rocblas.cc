@@ -24,7 +24,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
 #include "rocm/include/rocblas.h"
-//#include "rocm/include/rocsolver.h"
+#include "rocm/include/rocsolver.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hip/hip_runtime_api.h"
 #include "include/pybind11/numpy.h"
@@ -289,7 +289,7 @@ std::pair<size_t, py::bytes> BuildGetrfBatchedDescriptor(const py::dtype& dtype,
   return {size, PackDescriptor(GetrfBatchedDescriptor{type, b, n})};
 }
 
-/*
+
 void GetrfBatched(hipStream_t stream, void** buffers, const char* opaque,
                   size_t opaque_len) {
   const GetrfBatchedDescriptor& d =
@@ -313,38 +313,34 @@ void GetrfBatched(hipStream_t stream, void** buffers, const char* opaque,
     case Type::F32: {
       float* a = static_cast<float*>(buffers[1]);
       float** batch_ptrs = static_cast<float**>(buffers[4]);
-      ThrowIfErrorStatus(rocsolver_sgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
-                                             ipiv, info, d.batch));
+      ThrowIfErrorStatus(rocsolver_sgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
     }
     case Type::F64: {
       double* a = static_cast<double*>(buffers[1]);
       double** batch_ptrs = static_cast<double**>(buffers[4]);
-      ThrowIfErrorStatus(rocsolver_dgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
-                                             ipiv, info, d.batch));
+      ThrowIfErrorStatus(rocsolver_dgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
     }
     case Type::C64: {
       rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
       rocblas_float_complex** batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
-      ThrowIfErrorStatus(rocsolver_cgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
-                                             ipiv, info, d.batch));
+      ThrowIfErrorStatus(rocsolver_cgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
     }
     case Type::C128: {
       rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
       rocblas_double_complex** batch_ptrs = static_cast<rocblas_double_complex**>(buffers[4]);
-      ThrowIfErrorStatus(rocsolver_zgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
-                                             ipiv, info, d.batch));
+      ThrowIfErrorStatus(rocsolver_zgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
     }
-  }
+ }
 }
-*/
+
 py::dict Registrations() {
   py::dict dict;
   dict["rocblas_trsm_batched"] = EncapsulateFunction(TrsmBatched);
-//  dict["rocblas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
+  dict["rocblas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
   return dict;
 }
 

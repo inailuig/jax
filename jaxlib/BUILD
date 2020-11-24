@@ -137,7 +137,8 @@ pybind_extension(
     deps = [
         ":gpu_kernel_helpers",
         ":kernel_pybind11_helpers",
-        "@org_tensorflow//tensorflow/stream_executor/rocm:rocblas_plugin", # TODO
+#        "@org_tensorflow//tensorflow/stream_executor/rocm:rocblas_plugin", # TODO
+        "@org_tensorflow//tensorflow/stream_executor/rocm:all_runtime",  
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
@@ -147,6 +148,7 @@ pybind_extension(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
+        "@local_config_rocm//rocm:rocm", # TODO
         "@local_config_rocm//rocm:rocm_headers",
         "@pybind11",
     ],
