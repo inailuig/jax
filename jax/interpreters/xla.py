@@ -343,7 +343,6 @@ def primitive_subcomputation(prim, *avals, **params):
 def backend_compile(backend, built_c, options):
   # we use a separate function call to ensure that XLA compilation appears
   # separately in Python profiling results
-  print('backend_compile', built_c, options)
   return backend.compile(built_c, compile_options=options)
 
 def _execute_compiled_primitive(prim, compiled, result_handler, *args):
