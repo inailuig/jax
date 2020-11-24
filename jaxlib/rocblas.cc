@@ -42,10 +42,6 @@ void ThrowIfErrorStatus(rocblas_status status) {
   switch (status) {
     case  rocblas_status_success:
       return;
-//   case HIPBLAS_STATUS_NOT_INITIALIZED:
-//      throw std::runtime_error("hipblas has not been initialized");
-//    case hipblas_STATUS_LICENSE_ERROR:
-//      throw std::runtime_error("hipblas license error");
 // TODO
     default:
       throw std::runtime_error("Unknown rocblas error");
@@ -205,30 +201,24 @@ std::pair<size_t, py::bytes> BuildTrsmBatchedDescriptor(
   return {size, PackDescriptor(desc)};
 }
 
-void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
-                 size_t opaque_len) {
-  const TrsmBatchedDescriptor& d =
-      *UnpackDescriptor<TrsmBatchedDescriptor>(opaque, opaque_len);
+void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque, size_t opaque_len) {
+  const TrsmBatchedDescriptor& d =  *UnpackDescriptor<TrsmBatchedDescriptor>(opaque, opaque_len);
   auto handle = BlasHandlePool::Borrow(stream);
   if (buffers[2] != buffers[1]) {
-    ThrowIfError(hipMemcpyAsync(buffers[2], buffers[1],
-                                 SizeOfType(d.type) * d.batch * d.m * d.n,
-                                 hipMemcpyDeviceToDevice, stream));
+    ThrowIfError(hipMemcpyAsync(buffers[2], buffers[1], SizeOfType(d.type) * d.batch * d.m * d.n, hipMemcpyDeviceToDevice, stream));
   }
   const int lda = d.side == rocblas_side_left ? d.m : d.n;
   const int ldb = d.m;
-  auto a_batch_host = MakeBatchPointers(stream, buffers[0], buffers[3], d.batch,
-                                        SizeOfType(d.type) * lda * lda);
-  auto b_batch_host = MakeBatchPointers(stream, buffers[2], buffers[4], d.batch,
-                                        SizeOfType(d.type) * d.m * d.n);
+  auto a_batch_host = MakeBatchPointers(stream, buffers[0], buffers[3], d.batch, SizeOfType(d.type) * lda * lda);
+  auto b_batch_host = MakeBatchPointers(stream, buffers[2], buffers[4], d.batch, SizeOfType(d.type) * d.m * d.n);
   // TODO(phawkins): ideally we would not need to synchronize here, but to
   // avoid it we need a way to keep the host-side buffer alive until the copy
   // completes.
   ThrowIfError(hipStreamSynchronize(stream));
   switch (d.type) {
     case Type::F32: {
-      float* a = static_cast<float*>(buffers[0]);
-      float* b = static_cast<float*>(buffers[2]);
+      // float* a = static_cast<float*>(buffers[0]);
+      // float* b = static_cast<float*>(buffers[2]);
       float** a_batch_ptrs = static_cast<float**>(buffers[3]);
       float** b_batch_ptrs = static_cast<float**>(buffers[4]);
       // NOTE(phawkins): if alpha is in GPU memory, hipblas seems to segfault.
@@ -240,8 +230,8 @@ void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::F64: {
-      double* a = static_cast<double*>(buffers[0]);
-      double* b = static_cast<double*>(buffers[2]);
+      // double* a = static_cast<double*>(buffers[0]);
+      // double* b = static_cast<double*>(buffers[2]);
       double** a_batch_ptrs = static_cast<double**>(buffers[3]);
       double** b_batch_ptrs = static_cast<double**>(buffers[4]);
       const double alpha = 1.0;
@@ -252,8 +242,8 @@ void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C64: {
-      rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[0]);
-      rocblas_float_complex* b = static_cast<rocblas_float_complex*>(buffers[2]);
+      // rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[0]);
+      // rocblas_float_complex* b = static_cast<rocblas_float_complex*>(buffers[2]);
       rocblas_float_complex** a_batch_ptrs = static_cast<rocblas_float_complex**>(buffers[3]);
       rocblas_float_complex** b_batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
       const rocblas_float_complex alpha = {1.0f, 0.0f};
@@ -264,12 +254,10 @@ void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
       break;
     }
     case Type::C128: {
-      rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[0]);
-      rocblas_double_complex* b = static_cast<rocblas_double_complex*>(buffers[2]);
-      rocblas_double_complex** a_batch_ptrs =
-          static_cast<rocblas_double_complex**>(buffers[3]);
-      rocblas_double_complex** b_batch_ptrs =
-          static_cast<rocblas_double_complex**>(buffers[4]);
+      // rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[0]);
+      // rocblas_double_complex* b = static_cast<rocblas_double_complex*>(buffers[2]);
+      rocblas_double_complex** a_batch_ptrs = static_cast<rocblas_double_complex**>(buffers[3]);
+      rocblas_double_complex** b_batch_ptrs = static_cast<rocblas_double_complex**>(buffers[4]);
       const rocblas_double_complex alpha = {1.0d, 0.0d};
       ThrowIfErrorStatus(rocblas_ztrsm_batched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
@@ -288,8 +276,7 @@ struct GetrfBatchedDescriptor {
 };
 
 // Returns the descriptor for a GetrfBatched operation.
-std::pair<size_t, py::bytes> BuildGetrfBatchedDescriptor(const py::dtype& dtype,
-                                                         int b, int n) {
+std::pair<size_t, py::bytes> BuildGetrfBatchedDescriptor(const py::dtype& dtype, int b, int n) {
   Type type = DtypeToType(dtype);
   size_t size = b * sizeof(void*);
   return {size, PackDescriptor(GetrfBatchedDescriptor{type, b, n})};
@@ -298,44 +285,40 @@ std::pair<size_t, py::bytes> BuildGetrfBatchedDescriptor(const py::dtype& dtype,
 
 void GetrfBatched(hipStream_t stream, void** buffers, const char* opaque,
                   size_t opaque_len) {
-  const GetrfBatchedDescriptor& d =
-      *UnpackDescriptor<GetrfBatchedDescriptor>(opaque, opaque_len);
+  const GetrfBatchedDescriptor& d =  *UnpackDescriptor<GetrfBatchedDescriptor>(opaque, opaque_len);
   auto handle = BlasHandlePool::Borrow(stream);
   if (buffers[0] != buffers[1]) {
-    ThrowIfError(hipMemcpyAsync(buffers[1], buffers[0],
-                                 SizeOfType(d.type) * d.batch * d.n * d.n,
-                                 hipMemcpyDeviceToDevice, stream));
+    ThrowIfError(hipMemcpyAsync(buffers[1], buffers[0], SizeOfType(d.type) * d.batch * d.n * d.n, hipMemcpyDeviceToDevice, stream));
   }
 
   int* ipiv = static_cast<int*>(buffers[2]);
   int* info = static_cast<int*>(buffers[3]);
-  auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch,
-                                       SizeOfType(d.type) * d.n * d.n);
+  auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.n * d.n);
   // TODO(phawkins): ideally we would not need to synchronize here, but to
   // avoid it we need a way to keep the host-side buffer alive until the copy
   // completes.
   ThrowIfError(hipStreamSynchronize(stream));
   switch (d.type) {
     case Type::F32: {
-      float* a = static_cast<float*>(buffers[1]);
+      // float* a = static_cast<float*>(buffers[1]);
       float** batch_ptrs = static_cast<float**>(buffers[4]);
       ThrowIfErrorStatus(rocsolver_sgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
     }
     case Type::F64: {
-      double* a = static_cast<double*>(buffers[1]);
+      // double* a = static_cast<double*>(buffers[1]);
       double** batch_ptrs = static_cast<double**>(buffers[4]);
       ThrowIfErrorStatus(rocsolver_dgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
     }
     case Type::C64: {
-      rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
+      // rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
       rocblas_float_complex** batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
       ThrowIfErrorStatus(rocsolver_cgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
     }
     case Type::C128: {
-      rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
+      // rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
       rocblas_double_complex** batch_ptrs = static_cast<rocblas_double_complex**>(buffers[4]);
       ThrowIfErrorStatus(rocsolver_zgetrf_batched(handle.get(), d.n, d.n, batch_ptrs, d.n, ipiv, d.n, info, d.batch));
       break;
@@ -365,18 +348,14 @@ std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype, bool lowe
   return {size, PackDescriptor(PotrfDescriptor{type, uplo, b, n})};
 }
 
-void Potrf(hipStream_t stream, void** buffers, const char* opaque,
-           size_t opaque_len) {
+void Potrf(hipStream_t stream, void** buffers, const char* opaque, size_t opaque_len) {
   const PotrfDescriptor& d = *UnpackDescriptor<PotrfDescriptor>(opaque, opaque_len);
   auto handle = BlasHandlePool::Borrow(stream);
   if (buffers[1] != buffers[0]) {
-    ThrowIfError(hipMemcpyAsync(buffers[1], buffers[0],
-                                 SizeOfType(d.type) * d.batch * d.n * d.n,
-                                 hipMemcpyDeviceToDevice, stream));
+    ThrowIfError(hipMemcpyAsync(buffers[1], buffers[0], SizeOfType(d.type) * d.batch * d.n * d.n, hipMemcpyDeviceToDevice, stream));
   }
 
   int* info = static_cast<int*>(buffers[2]);
-  void* workspace = buffers[3];
   if (d.batch == 1) {
     switch (d.type) {
       case Type::F32: {
@@ -401,25 +380,116 @@ void Potrf(hipStream_t stream, void** buffers, const char* opaque,
       }
     }
   } else {
-    auto buffer_ptrs_host = MakeBatchPointers(stream, buffers[1], workspace, d.batch, SizeOfType(d.type) * d.n * d.n);
-    // Make sure that accesses to buffer_ptrs_host complete before we delete it.
-    // TODO(phawkins): avoid synchronization here.
+
+    auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.n * d.n);
+    // TODO(phawkins): ideally we would not need to synchronize here, but to
+    // avoid it we need a way to keep the host-side buffer alive until the copy
+    // completes.
     ThrowIfError(hipStreamSynchronize(stream));
+
     switch (d.type) {
       case Type::F32: {
-        ThrowIfErrorStatus(rocsolver_spotrf_batched(handle.get(), d.uplo, d.n, static_cast<float**>(workspace), d.n, info, d.batch));
+        float** batch_ptrs = static_cast<float**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_spotrf_batched(handle.get(), d.uplo, d.n, batch_ptrs, d.n, info, d.batch));
         break;
       }
       case Type::F64: {
-        ThrowIfErrorStatus(rocsolver_dpotrf_batched(handle.get(), d.uplo, d.n, static_cast<double**>(workspace), d.n, info, d.batch));
+        double** batch_ptrs = static_cast<double**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_dpotrf_batched(handle.get(), d.uplo, d.n, batch_ptrs, d.n, info, d.batch));
         break;
       }
       case Type::C64: {
-        ThrowIfErrorStatus(rocsolver_cpotrf_batched(handle.get(), d.uplo, d.n, static_cast<rocblas_float_complex**>(workspace), d.n, info, d.batch));
+        rocblas_float_complex** batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_cpotrf_batched(handle.get(), d.uplo, d.n, batch_ptrs, d.n, info, d.batch));
         break;
       }
       case Type::C128: {
-        ThrowIfErrorStatus(rocsolver_zpotrf_batched(handle.get(), d.uplo, d.n, static_cast<rocblas_double_complex**>(workspace), d.n, info, d.batch));
+        rocblas_double_complex** batch_ptrs = static_cast<rocblas_double_complex**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_zpotrf_batched(handle.get(), d.uplo, d.n, batch_ptrs, d.n, info, d.batch));
+        break;
+      }
+    }
+  }
+}
+
+
+
+
+
+// getrf: LU decomposition
+
+struct GetrfDescriptor {
+  Type type;
+  int batch, m, n;
+};
+
+// Returns the descriptor for a getrf operation.
+std::pair<int, py::bytes> BuildGetrfDescriptor(const py::dtype& dtype, int b, int m, int n) {
+  Type type = DtypeToType(dtype);
+  std::int64_t size = b * sizeof(void*); // TODO
+  return {size, PackDescriptor(GetrfDescriptor{type, b, m, n})};
+}
+
+void Getrf(hipStream_t stream, void** buffers, const char* opaque, size_t opaque_len) {
+  const GetrfDescriptor& d = *UnpackDescriptor<GetrfDescriptor>(opaque, opaque_len);
+  auto handle = BlasHandlePool::Borrow(stream);
+  if (buffers[1] != buffers[0]) {
+    ThrowIfError(hipMemcpyAsync(buffers[1], buffers[0], SizeOfType(d.type) * d.batch * d.m * d.n, hipMemcpyDeviceToDevice, stream));
+  }
+
+  int* ipiv = static_cast<int*>(buffers[2]);
+  int* info = static_cast<int*>(buffers[3]);
+
+  if (d.batch == 1) {
+    switch (d.type) {
+      case Type::F32: {
+        float* a = static_cast<float*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_sgetrf(handle.get(), d.m, d.n, a, d.m, ipiv, info));
+        break;
+      }
+      case Type::F64: {
+        double* a = static_cast<double*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_dgetrf(handle.get(), d.m, d.n, a, d.m, ipiv, info));
+        break;
+      }
+      case Type::C64: {
+        rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_cgetrf(handle.get(), d.m, d.n, a, d.m, ipiv, info));
+        break;
+      }
+      case Type::C128: {
+        rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
+        ThrowIfErrorStatus(rocsolver_zgetrf(handle.get(), d.m, d.n, a, d.m, ipiv, info));
+        break;
+      }
+    }
+  } else {
+
+    auto a_ptrs_host = MakeBatchPointers(stream, buffers[1], buffers[4], d.batch, SizeOfType(d.type) * d.n * d.n);
+    // TODO(phawkins): ideally we would not need to synchronize here, but to
+    // avoid it we need a way to keep the host-side buffer alive until the copy
+    // completes.
+    ThrowIfError(hipStreamSynchronize(stream));
+
+    switch (d.type) {
+      case Type::F32: {
+        float** batch_ptrs = static_cast<float**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_sgetrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, info, d.batch));
+        break;
+      }
+      case Type::F64: {
+        double** batch_ptrs = static_cast<double**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_dgetrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, info, d.batch));
+        break;
+      }
+      case Type::C64: {
+        rocblas_float_complex** batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_cgetrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, info, d.batch));
+        break;
+      }
+      case Type::C128: {
+        rocblas_double_complex** batch_ptrs = static_cast<rocblas_double_complex**>(buffers[4]);
+        ThrowIfErrorStatus(rocsolver_zgetrf_batched(handle.get(), d.m, d.n, batch_ptrs, d.m, ipiv, d.m<d.n?d.m:d.n, info, d.batch));
         break;
       }
     }
@@ -431,19 +501,31 @@ void Potrf(hipStream_t stream, void** buffers, const char* opaque,
 
 
 
+
+
+
+
 py::dict Registrations() {
   py::dict dict;
-  dict["rocsolver_potrf"] = EncapsulateFunction(Potrf);
+
   dict["rocblas_trsm_batched"] = EncapsulateFunction(TrsmBatched);
-  dict["rocblas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
+  dict["rocblas_getrf_batched"] = EncapsulateFunction(GetrfBatched); // TODO WHY is it in both cublas_kernels and cusolver_kernels???
+
+  dict["rocsolver_potrf"] = EncapsulateFunction(Potrf);
+  dict["rocsolver_getrf"] = EncapsulateFunction(Getrf);
+
   return dict;
 }
 
 PYBIND11_MODULE(rocblas_kernels, m) {
   m.def("registrations", &Registrations);
-  m.def("build_potrf_descriptor", &BuildPotrfDescriptor);
+
   m.def("build_trsm_batched_descriptor", &BuildTrsmBatchedDescriptor);
   m.def("build_getrf_batched_descriptor", &BuildGetrfBatchedDescriptor);
+
+  m.def("build_potrf_descriptor", &BuildPotrfDescriptor);
+  m.def("build_getrf_descriptor", &BuildGetrfDescriptor);
+
 }
 
 }  // namespace
