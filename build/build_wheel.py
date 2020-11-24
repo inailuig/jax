@@ -118,7 +118,7 @@ def prepare_wheel(sources_path):
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/cusolver_kernels.pyd"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/cuda_prng_kernels.pyd"))
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/version.py"))
-  #copy_to_jaxlib(r.Rlocation("__main__/jaxlib/cusolver.py"))
+  copy_to_jaxlib(r.Rlocation("__main__/jaxlib/rocsolver.py"))
 
   # TODO
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/rocblas_kernels.so"))

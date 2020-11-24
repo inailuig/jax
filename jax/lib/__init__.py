@@ -17,7 +17,7 @@
 
 __all__ = [
   'rocm_prng',
-# 'cusolver',
+  'rocsolver',
   'jaxlib', 'lapack',
   'pytree', 'tpu_client', 'version', 'xla_client'
 ]
@@ -59,7 +59,7 @@ if version <  (0, 1, 53):
 else:
   pytree = xla_client._xla.pytree
   jax_jit = xla_client._xla.jax_jit
-#from jaxlib import cusolver
+from jaxlib import rocsolver
 try:
   from jaxlib import rocm_prng
 except ImportError:

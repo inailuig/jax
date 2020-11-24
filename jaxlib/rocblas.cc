@@ -23,7 +23,8 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
-#include "rocm/include/hipblas.h"
+#include "rocm/include/rocblas.h"
+//#include "rocm/include/rocsolver.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hip/hip_runtime_api.h"
 #include "include/pybind11/numpy.h"
@@ -37,30 +38,17 @@ namespace {
 
 namespace py = pybind11;
 
-void ThrowIfErrorStatus(hipblasStatus_t status) {
+void ThrowIfErrorStatus(rocblas_status status) {
   switch (status) {
-    case HIPBLAS_STATUS_SUCCESS:
+    case  rocblas_status_success:
       return;
-    case HIPBLAS_STATUS_NOT_INITIALIZED:
-      throw std::runtime_error("hipblas has not been initialized");
-    case HIPBLAS_STATUS_ALLOC_FAILED:
-      throw std::runtime_error("hipblas allocation failure");
-    case HIPBLAS_STATUS_INVALID_VALUE:
-      throw std::runtime_error("hipblas invalid value error");
-    case HIPBLAS_STATUS_ARCH_MISMATCH:
-      throw std::runtime_error("hipblas architecture mismatch");
-    case HIPBLAS_STATUS_MAPPING_ERROR:
-      throw std::runtime_error("hipblas mapping error");
-    case HIPBLAS_STATUS_EXECUTION_FAILED:
-      throw std::runtime_error("hipblas execution failed");
-    case HIPBLAS_STATUS_INTERNAL_ERROR:
-      throw std::runtime_error("hipblas internal error");
-    case HIPBLAS_STATUS_NOT_SUPPORTED:
-      throw std::runtime_error("hipblas not supported error");
+//   case HIPBLAS_STATUS_NOT_INITIALIZED:
+//      throw std::runtime_error("hipblas has not been initialized");
 //    case hipblas_STATUS_LICENSE_ERROR:
 //      throw std::runtime_error("hipblas license error");
+// TODO
     default:
-      throw std::runtime_error("Unknown hipblas error");
+      throw std::runtime_error("Unknown rocblas error");
   }
 }
 
@@ -97,14 +85,14 @@ class BlasHandlePool {
       return *this;
     }
 
-    hipblasHandle_t get() { return handle_; }
+    rocblas_handle get() { return handle_; }
 
    private:
     friend class BlasHandlePool;
-    Handle(BlasHandlePool* pool, hipblasHandle_t handle)
+    Handle(BlasHandlePool* pool, rocblas_handle handle)
         : pool_(pool), handle_(handle) {}
     BlasHandlePool* pool_ = nullptr;
-    hipblasHandle_t handle_ = nullptr;
+    rocblas_handle handle_ = nullptr;
   };
 
   // Borrows a handle from the pool. If 'stream' is non-null, sets the stream
@@ -114,10 +102,10 @@ class BlasHandlePool {
  private:
   static BlasHandlePool* Instance();
 
-  void Return(hipblasHandle_t handle);
+  void Return(rocblas_handle handle);
 
   absl::Mutex mu_;
-  std::vector<hipblasHandle_t> handles_ ABSL_GUARDED_BY(mu_);
+  std::vector<rocblas_handle> handles_ ABSL_GUARDED_BY(mu_);
 };
 
 /*static*/ BlasHandlePool* BlasHandlePool::Instance() {
@@ -128,20 +116,20 @@ class BlasHandlePool {
 /*static*/ BlasHandlePool::Handle BlasHandlePool::Borrow(hipStream_t stream) {
   BlasHandlePool* pool = Instance();
   absl::MutexLock lock(&pool->mu_);
-  hipblasHandle_t handle;
+  rocblas_handle handle;
   if (pool->handles_.empty()) {
-    ThrowIfErrorStatus(hipblasCreate(&handle));
+    ThrowIfErrorStatus(rocblas_create_handle(&handle));
   } else {
     handle = pool->handles_.back();
     pool->handles_.pop_back();
   }
   if (stream) {
-    ThrowIfErrorStatus(hipblasSetStream(handle, stream));
+    ThrowIfErrorStatus(rocblas_set_stream(handle, stream));
   }
   return Handle(pool, handle);
 }
 
-void BlasHandlePool::Return(hipblasHandle_t handle) {
+void BlasHandlePool::Return(rocblas_handle handle) {
   absl::MutexLock lock(&mu_);
   handles_.push_back(handle);
 }
@@ -177,9 +165,9 @@ int SizeOfType(Type type) {
     case Type::F64:
       return sizeof(double);
     case Type::C64:
-      return sizeof(hipblasComplex);
+      return sizeof(rocblas_float_complex);
     case Type::C128:
-      return sizeof(hipblasDoubleComplex);
+      return sizeof(rocblas_double_complex);
   }
 }
 
@@ -188,10 +176,10 @@ int SizeOfType(Type type) {
 struct TrsmBatchedDescriptor {
   Type type;
   int batch, m, n;
-  hipblasSideMode_t side;
-  hipblasFillMode_t uplo;
-  hipblasOperation_t trans;
-  hipblasDiagType_t diag;
+  rocblas_side side;
+  rocblas_fill uplo;
+  rocblas_operation trans;
+  rocblas_diagonal diag;
 };
 
 // Returns the descriptor for a TrsmBatched operation.
@@ -204,10 +192,10 @@ std::pair<size_t, py::bytes> BuildTrsmBatchedDescriptor(
   desc.batch = batch;
   desc.m = m;
   desc.n = n;
-  desc.side = left_side ? HIPBLAS_SIDE_LEFT : HIPBLAS_SIDE_RIGHT;
-  desc.uplo = lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
-  desc.trans = trans_a ? (conj_a ? HIPBLAS_OP_C : HIPBLAS_OP_T) : HIPBLAS_OP_N;
-  desc.diag = unit_diagonal ? HIPBLAS_DIAG_UNIT : HIPBLAS_DIAG_NON_UNIT;
+  desc.side = left_side ? rocblas_side_left : rocblas_side_right;
+  desc.uplo = lower ? rocblas_fill_lower : rocblas_fill_upper;
+  desc.trans = trans_a ? (conj_a ? rocblas_operation_conjugate_transpose : rocblas_operation_transpose) : rocblas_operation_none;
+  desc.diag = unit_diagonal ? rocblas_diagonal_unit : rocblas_diagonal_non_unit;
   return {size, PackDescriptor(desc)};
 }
 
@@ -221,7 +209,7 @@ void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
                                  SizeOfType(d.type) * d.batch * d.m * d.n,
                                  hipMemcpyDeviceToDevice, stream));
   }
-  const int lda = d.side == HIPBLAS_SIDE_LEFT ? d.m : d.n;
+  const int lda = d.side == rocblas_side_left ? d.m : d.n;
   const int ldb = d.m;
   auto a_batch_host = MakeBatchPointers(stream, buffers[0], buffers[3], d.batch,
                                         SizeOfType(d.type) * lda * lda);
@@ -239,7 +227,7 @@ void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
       float** b_batch_ptrs = static_cast<float**>(buffers[4]);
       // NOTE(phawkins): if alpha is in GPU memory, hipblas seems to segfault.
       const float alpha = 1.0f;
-      ThrowIfErrorStatus(hipblasStrsmBatched(
+      ThrowIfErrorStatus(rocblas_strsm_batched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
           const_cast<float**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
           d.batch));
@@ -251,35 +239,35 @@ void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
       double** a_batch_ptrs = static_cast<double**>(buffers[3]);
       double** b_batch_ptrs = static_cast<double**>(buffers[4]);
       const double alpha = 1.0;
-      ThrowIfErrorStatus(hipblasDtrsmBatched(
+      ThrowIfErrorStatus(rocblas_dtrsm_batched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
           const_cast<double**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
           d.batch));
       break;
     }
     case Type::C64: {
-      hipblasComplex* a = static_cast<hipblasComplex*>(buffers[0]);
-      hipblasComplex* b = static_cast<hipblasComplex*>(buffers[2]);
-      hipblasComplex** a_batch_ptrs = static_cast<hipblasComplex**>(buffers[3]);
-      hipblasComplex** b_batch_ptrs = static_cast<hipblasComplex**>(buffers[4]);
-      const hipblasComplex alpha(1.0f, 0.0f);
-      ThrowIfErrorStatus(hipblasCtrsmBatched(
+      rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[0]);
+      rocblas_float_complex* b = static_cast<rocblas_float_complex*>(buffers[2]);
+      rocblas_float_complex** a_batch_ptrs = static_cast<rocblas_float_complex**>(buffers[3]);
+      rocblas_float_complex** b_batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
+      const rocblas_float_complex alpha = {1.0f, 0.0f};
+      ThrowIfErrorStatus(rocblas_ctrsm_batched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
-          const_cast<hipblasComplex**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
+          const_cast<rocblas_float_complex**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
           d.batch));
       break;
     }
     case Type::C128: {
-      hipblasDoubleComplex* a = static_cast<hipblasDoubleComplex*>(buffers[0]);
-      hipblasDoubleComplex* b = static_cast<hipblasDoubleComplex*>(buffers[2]);
-      hipblasDoubleComplex** a_batch_ptrs =
-          static_cast<hipblasDoubleComplex**>(buffers[3]);
-      hipblasDoubleComplex** b_batch_ptrs =
-          static_cast<hipblasDoubleComplex**>(buffers[4]);
-      const hipblasDoubleComplex alpha(1.0f, 0.0f);
-      ThrowIfErrorStatus(hipblasZtrsmBatched(
+      rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[0]);
+      rocblas_double_complex* b = static_cast<rocblas_double_complex*>(buffers[2]);
+      rocblas_double_complex** a_batch_ptrs =
+          static_cast<rocblas_double_complex**>(buffers[3]);
+      rocblas_double_complex** b_batch_ptrs =
+          static_cast<rocblas_double_complex**>(buffers[4]);
+      const rocblas_double_complex alpha = {1.0d, 0.0d};
+      ThrowIfErrorStatus(rocblas_ztrsm_batched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
-          const_cast<hipblasDoubleComplex**>(a_batch_ptrs), lda, b_batch_ptrs,
+          const_cast<rocblas_double_complex**>(a_batch_ptrs), lda, b_batch_ptrs,
           ldb, d.batch));
       break;
     }
@@ -301,6 +289,7 @@ std::pair<size_t, py::bytes> BuildGetrfBatchedDescriptor(const py::dtype& dtype,
   return {size, PackDescriptor(GetrfBatchedDescriptor{type, b, n})};
 }
 
+/*
 void GetrfBatched(hipStream_t stream, void** buffers, const char* opaque,
                   size_t opaque_len) {
   const GetrfBatchedDescriptor& d =
@@ -324,38 +313,38 @@ void GetrfBatched(hipStream_t stream, void** buffers, const char* opaque,
     case Type::F32: {
       float* a = static_cast<float*>(buffers[1]);
       float** batch_ptrs = static_cast<float**>(buffers[4]);
-      ThrowIfErrorStatus(hipblasSgetrfBatched(handle.get(), d.n, batch_ptrs, d.n,
+      ThrowIfErrorStatus(rocsolver_sgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
                                              ipiv, info, d.batch));
       break;
     }
     case Type::F64: {
       double* a = static_cast<double*>(buffers[1]);
       double** batch_ptrs = static_cast<double**>(buffers[4]);
-      ThrowIfErrorStatus(hipblasDgetrfBatched(handle.get(), d.n, batch_ptrs, d.n,
+      ThrowIfErrorStatus(rocsolver_dgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
                                              ipiv, info, d.batch));
       break;
     }
     case Type::C64: {
-      hipblasComplex* a = static_cast<hipblasComplex*>(buffers[1]);
-      hipblasComplex** batch_ptrs = static_cast<hipblasComplex**>(buffers[4]);
-      ThrowIfErrorStatus(hipblasCgetrfBatched(handle.get(), d.n, batch_ptrs, d.n,
+      rocblas_float_complex* a = static_cast<rocblas_float_complex*>(buffers[1]);
+      rocblas_float_complex** batch_ptrs = static_cast<rocblas_float_complex**>(buffers[4]);
+      ThrowIfErrorStatus(rocsolver_cgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
                                              ipiv, info, d.batch));
       break;
     }
     case Type::C128: {
-      hipblasDoubleComplex* a = static_cast<hipblasDoubleComplex*>(buffers[1]);
-      hipblasDoubleComplex** batch_ptrs = static_cast<hipblasDoubleComplex**>(buffers[4]);
-      ThrowIfErrorStatus(hipblasZgetrfBatched(handle.get(), d.n, batch_ptrs, d.n,
+      rocblas_double_complex* a = static_cast<rocblas_double_complex*>(buffers[1]);
+      rocblas_double_complex** batch_ptrs = static_cast<rocblas_double_complex**>(buffers[4]);
+      ThrowIfErrorStatus(rocsolver_zgetrf_batched(handle.get(), d.n, batch_ptrs, d.n,
                                              ipiv, info, d.batch));
       break;
     }
   }
 }
-
+*/
 py::dict Registrations() {
   py::dict dict;
   dict["rocblas_trsm_batched"] = EncapsulateFunction(TrsmBatched);
-  dict["rocblas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
+//  dict["rocblas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
   return dict;
 }
 
