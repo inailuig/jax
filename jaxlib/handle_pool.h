@@ -24,17 +24,15 @@ limitations under the License.
 namespace jax {
 namespace {
 
-
-// To avoid creating cublas/cusolver contexts in the middle of execution, we maintain
-// a pool of them.
+// To avoid creating cublas/cusolver contexts in the middle of execution, we
+// maintain a pool of them.
 template <typename HandleType, typename StreamType>
 class HandlePool {
  public:
-
   HandlePool() = default;
 
-  // RAII class representing a cublas/cusolver handle borrowed from the pool. Returns
-  // the handle to the pool on destruction.
+  // RAII class representing a cublas/cusolver handle borrowed from the pool.
+  // Returns the handle to the pool on destruction.
   class Handle {
    public:
     Handle() = default;
@@ -83,9 +81,9 @@ class HandlePool {
   std::vector<HandleType> handles_ ABSL_GUARDED_BY(mu_);
 };
 
-
 template <typename HandleType, typename StreamType>
-/*static*/ HandlePool<HandleType, StreamType>* HandlePool<HandleType, StreamType>::Instance() {
+/*static*/ HandlePool<HandleType, StreamType>*
+HandlePool<HandleType, StreamType>::Instance() {
   static auto* pool = new HandlePool<HandleType, StreamType>;
   return pool;
 }
@@ -96,10 +94,8 @@ void HandlePool<HandleType, StreamType>::Return(HandleType handle) {
   handles_.push_back(handle);
 }
 
-
 // template <typename HandleType, typename StreamType>
 // HandlePool<HandleType, StreamType>::Borrow(StreamType stream)
-
 
 }  // namespace
 }  // namespace jax
