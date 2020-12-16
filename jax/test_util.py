@@ -58,6 +58,12 @@ flags.DEFINE_bool(
     help='Skip tests marked as slow (> 5 sec).'
 )
 
+flags.DEFINE_bool(
+    'jax_skip_on_rocm',
+    bool_env('JAX_SKIP_ON_ROCM', False),
+    help='Skip tests which are not yet implemented on ROCm.'
+)
+
 flags.DEFINE_string(
   'test_targets', '',
   'Regular expression specifying which tests to run, called via re.match on '
