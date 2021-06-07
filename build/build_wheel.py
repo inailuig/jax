@@ -222,7 +222,8 @@ def build_wheel(sources_path, output_path):
     platform_name = "win"
   else:
     platform_name, cpu_name = {
-      ("Linux", "x86_64"): ("manylinux2010", "x86_64"),
+      ("Linux", "x86_64"): ("manylinux2014", "aarch64"),
+#      ("Linux", "x86_64"): ("manylinux2010", "x86_64"),
       ("Linux", "aarch64"): ("manylinux2014", "aarch64"),
       ("Darwin", "x86_64"): ("macosx_10_9", "x86_64"),
       ("Darwin", "arm64"): ("macosx_11_0", "arm64"),

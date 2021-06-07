@@ -226,13 +226,13 @@ build --repo_env TF_NEED_CUDA="{tf_need_cuda}"
 build --action_env TF_CUDA_COMPUTE_CAPABILITIES="{cuda_compute_capabilities}"
 build --repo_env TF_NEED_ROCM="{tf_need_rocm}"
 build --action_env TF_ROCM_AMDGPU_TARGETS="{rocm_amdgpu_targets}"
-build --distinct_host_configuration=false
+build --distinct_host_configuration=true
 build:posix --copt=-Wno-sign-compare
 build -c opt
 build:avx_posix --copt=-mavx
 build:avx_posix --host_copt=-mavx
 build:avx_windows --copt=/arch=AVX
-build:native_arch_posix --copt=-march=native
+build:native_arch_posix --copt=-mtune=cortex-a53 --copt=-march=armv8-a --copt=-std=gnu11 --copt=-O3 --cpu=aarch64 --crosstool_top=@local_config_embedded_arm//:toolchain --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
 build:native_arch_posix --host_copt=-march=native
 build:mkl_open_source_only --define=tensorflow_mkldnn_contraction_kernel=1
 
