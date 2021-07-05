@@ -2033,7 +2033,7 @@ def linear_transpose(fun: Callable, *primals) -> Callable:
                     "[float or complex], and integer -> integer functions, "
                     f"but got {in_dtypes} -> {out_dtypes}.")
 
-  def transposed_fun(out_cotangent):
+  def transposed_fun(consts, out_cotangent):
     out_cotangents, out_tree2 = tree_flatten(out_cotangent)
     if out_tree() != out_tree2:
       raise TypeError("cotangent tree does not match function output, "
@@ -2047,7 +2047,8 @@ def linear_transpose(fun: Callable, *primals) -> Callable:
         ad.backward_pass(jaxpr, consts, dummies, out_cotangents))
     return tree_unflatten(in_tree, in_cotangents)
 
-  return transposed_fun
+  # Ensure that transposed_fun is a PyTree
+  return Partial(transposed_fun, consts)
 
 
 def make_jaxpr(fun: Callable,
